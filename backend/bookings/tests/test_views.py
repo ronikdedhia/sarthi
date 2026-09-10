@@ -86,3 +86,51 @@ class BookItineraryApiTests(LiveServerTestCase):
         response = self.api.post(f"/api/trips/{trip_id}/book_itinerary/", {"legs": []}, format="json")
 
         assert response.status_code == 400
+
+
+@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=1)
+class TripTrackingApiTests(LiveServerTestCase):
+    """BUILD_PLAN.md Phase 3: GET /api/trips/<id>/tracking/ -- the endpoint the frontend's
+    live itinerary timeline polls. Real elapsed time, real HTTP round trip."""
+
+    def setUp(self):
+        self.api = APIClient()
+
+    def _gateway_url_override(self):
+        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+
+    def test_tracking_reflects_both_legs_progressing_to_in_progress_over_real_time(self):
+        import time
+
+        with self._gateway_url_override():
+            plan_response = self.api.post(
+                "/api/trips/plan/", {"origin": "Koramangala", "destination": "T Nagar"}, format="json",
+            )
+            itinerary = plan_response.data["itineraries"][0]
+            trip_id = plan_response.data["trip_id"]
+
+            book_response = self.api.post(
+                f"/api/trips/{trip_id}/book_itinerary/", {"legs": itinerary["legs"]}, format="json",
+            )
+            assert book_response.data["fully_booked"] is True
+
+            first_poll = self.api.get(f"/api/trips/{trip_id}/tracking/")
+            assert first_poll.status_code == 200, first_poll.data
+            assert len(first_poll.data["legs"]) == itinerary["leg_count"]
+            assert all(leg["status"] == "confirmed" for leg in first_poll.data["legs"])
+
+            time.sleep(1.2)
+            second_poll = self.api.get(f"/api/trips/{trip_id}/tracking/")
+
+        assert all(leg["status"] == "in_progress" for leg in second_poll.data["legs"])
+        # legs stay in their booked sequence order, each carrying its own mode/places for
+        # the frontend's timeline to render without a second lookup
+        assert [leg["sequence"] for leg in second_poll.data["legs"]] == sorted(
+            leg["sequence"] for leg in second_poll.data["legs"]
+        )
+        assert all(leg["from_place"] and leg["to_place"] for leg in second_poll.data["legs"])
+
+    def test_tracking_an_unknown_trip_is_a_404(self):
+        response = self.api.get("/api/trips/00000000-0000-0000-0000-000000000000/tracking/")
+
+        assert response.status_code == 404

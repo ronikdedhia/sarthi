@@ -5,13 +5,19 @@ Phase 1 scope was a single leg, booked synchronously end-to-end in one call. Pha
 adds book_itinerary: book several legs (each possibly a different ONDC domain) in
 order, stopping and surfacing clearly at whichever leg first fails -- see
 ItineraryBookingResult and book_itinerary's docstring for why this surfaces rather than
-auto-replans."""
+auto-replans.
+
+Phase 3 adds sync_booking_status/sync_trip_tracking: polling a CONFIRMED booking's real
+status forward (confirmed -> in_progress -> completed, per mock_bpp.store's elapsed-time
+simulation) so Sarthi's own DB -- not just the BPP's -- reflects live progress. Used by
+both bookings.views.trip_tracking (frontend poll) and the poll_bookings management
+command (a real standalone background worker, per ARCHITECTURE.md)."""
 from django.db import transaction as db_transaction
 
 from ondc_adapter.client import OndcRequestError
 from ondc_adapter import client
 
-from .models import Booking, TripLeg
+from .models import Booking, TrackingEvent, TripLeg
 
 
 class BookingFailedError(Exception):
@@ -121,3 +127,55 @@ def book_itinerary(trip, leg_specs):
         bookings.append(booking)
 
     return ItineraryBookingResult(trip=trip, bookings=bookings)
+
+
+_TERMINAL_STATUSES = (Booking.STATUS_COMPLETED, Booking.STATUS_CANCELLED, Booking.STATUS_FAILED)
+
+
+def sync_booking_status(booking):
+    """Polls the (mock) BPP for booking.trip_leg's real current status and advances the
+    Booking state machine to match, recording a TrackingEvent for each real transition --
+    this is what actually makes "confirmed" progress to "in_progress"/"completed" in
+    Sarthi's own DB, not just inside the BPP's own head (mock_bpp.store's elapsed-time
+    simulation). A real network's status/track callbacks would push this instead of
+    needing a poll; the mock BPP is deliberately synchronous (see mock_bpp/views.py's
+    docstring), so polling is the honest equivalent here — see ARCHITECTURE.md's own
+    "Django Channels (or simple polling to start)" phrasing.
+
+    Best-effort: an unreachable/flaky BPP call must not crash a poll loop checking many
+    bookings — same "never crash on a flaky ONDC call" posture bookings.views.booking_status
+    already had for a single read. A same-or-stale status is a silent no-op, not an error —
+    both a settled booking and a transient poll race look the same from here.
+
+    Returns the (possibly updated) Booking, unchanged if nothing needed to happen.
+    """
+    if booking.status in _TERMINAL_STATUSES:
+        return booking
+
+    try:
+        real_status, raw = client.get_status(booking.ondc_transaction_id, domain=booking.trip_leg.domain)
+    except OndcRequestError:
+        return booking
+
+    if real_status == booking.status:
+        return booking
+
+    try:
+        booking.transition_to(real_status)
+    except Booking.InvalidTransition:
+        # e.g. a stale poll reporting a status the state machine no longer accepts from
+        # here — silently ignored rather than raised, per this function's own docstring.
+        return booking
+
+    TrackingEvent.objects.create(booking=booking, event_type="on_status", payload=raw)
+    return booking
+
+
+def sync_trip_tracking(trip):
+    """Syncs every leg's Booking in `trip`, in sequence order — the one call both the
+    frontend's tracking poll (bookings.views.trip_tracking) and the poll_bookings
+    background worker use to bring a whole itinerary's live state up to date in one pass.
+    Legs never attempted (book_itinerary stopped before reaching them) have no Booking at
+    all yet and are simply skipped, not an error."""
+    legs = trip.legs.select_related("booking").order_by("sequence")
+    return [sync_booking_status(leg.booking) for leg in legs if hasattr(leg, "booking")]

@@ -5,7 +5,7 @@ from ondc_adapter import client as ondc_client
 from ondc_adapter.client import OndcRequestError
 
 from .models import Booking, Trip
-from .services import BookingFailedError, book_itinerary, book_leg
+from .services import BookingFailedError, book_itinerary, book_leg, sync_trip_tracking
 
 
 @api_view(["POST"])
@@ -98,4 +98,39 @@ def booking_status(request, booking_id):
         "status": booking.status,
         "order_id": booking.ondc_order_id,
         "live_bpp_status": live_status,
+    })
+
+
+@api_view(["GET"])
+def trip_tracking(request, trip_id):
+    """BUILD_PLAN.md Phase 3: the one endpoint the frontend polls to render a live,
+    per-leg itinerary timeline. Unlike booking_status (a single leg, live_bpp_status
+    reported alongside but not applied), this actually SYNCS each leg's Booking forward
+    (bookings.services.sync_trip_tracking) before responding — polling this endpoint is
+    what makes Sarthi's own DB state progress, not just what it reports."""
+    try:
+        trip = Trip.objects.get(pk=trip_id)
+    except Trip.DoesNotExist:
+        return Response({"error": f"no such trip {trip_id}"}, status=404)
+
+    bookings = sync_trip_tracking(trip)
+
+    return Response({
+        "trip_id": str(trip.id),
+        "legs": [
+            {
+                "sequence": b.trip_leg.sequence,
+                "domain": b.trip_leg.domain,
+                "mode": b.trip_leg.mode,
+                "provider_name": b.trip_leg.provider_name,
+                "from_place": b.trip_leg.raw_offer.get("fulfillment", {}).get("start", {})
+                                                     .get("location", {}).get("descriptor", {}).get("name", ""),
+                "to_place": b.trip_leg.raw_offer.get("fulfillment", {}).get("end", {})
+                                                   .get("location", {}).get("descriptor", {}).get("name", ""),
+                "booking_id": str(b.id),
+                "status": b.status,
+                "order_id": b.ondc_order_id,
+            }
+            for b in bookings
+        ],
     })

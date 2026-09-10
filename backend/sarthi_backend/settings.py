@@ -116,6 +116,15 @@ if os.environ.get('ONDC_BPP_PRIVATE_KEY') and os.environ.get('ONDC_BPP_PUBLIC_KE
 else:
     ONDC_BPP_PRIVATE_KEY, ONDC_BPP_PUBLIC_KEY = generate_signing_keypair()
 
+# BUILD_PLAN.md Phase 3 (live tracking): mock_bpp.store computes a confirmed order's CURRENT
+# status from elapsed real time since confirmation (confirmed -> in_progress -> completed)
+# rather than sitting at "confirmed" forever — see store.py. These are deliberately short so
+# polling shows real, visible progression on a human timescale; a real ETA (minutes/hours) is
+# not useful to wait out in a demo. Settings-driven (not module constants) so tests can shrink
+# them to ~1-2s via override_settings without waiting out the real defaults.
+MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS = int(os.environ.get('MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS', '8'))
+MOCK_ORDER_COMPLETED_AFTER_SECONDS = int(os.environ.get('MOCK_ORDER_COMPLETED_AFTER_SECONDS', '20'))
+
 # Points at THIS SAME server's /mock_bpp/ endpoints — see FEASIBILITY_RESEARCH.md #3
 # and mock_bpp/README.md for why: no ONDC registry approval exists to point at a real
 # gateway yet, so ondc_adapter.client talks to a same-process simulated seller instead.

@@ -42,16 +42,16 @@ Django owns three distinct responsibilities; keep them as separate apps so the O
 3. **`bookings`** — the persistence + state machine layer:
    - Trip, Leg, Booking, TrackingEvent models.
    - A booking state machine per leg (searched → selected → initiated → confirmed → in-progress → completed/cancelled) since ONDC's flow is asynchronous (callback-driven, not request/response in the REST sense).
-   - Background workers (Celery, or Django-native async tasks) for polling `status`/`track` callbacks and pushing live updates to the frontend.
+   - **Built 2026-09-10 (BUILD_PLAN.md Phase 3):** `sync_booking_status`/`sync_trip_tracking` poll the BPP's real current status and advance each `Booking` to match, recording a `TrackingEvent` per real transition — idempotent (a same-or-stale status is a silent no-op; an illegal transition is swallowed, not raised). `python manage.py poll_bookings` (`--interval`/`--once`) is the actual background worker — polls every non-terminal booking on its own cadence, independent of any open browser tab, so the DB itself stays current whether or not anyone's watching. `mock_bpp` was extended to match: a confirmed order's status is now computed from real elapsed time (`confirmed → in_progress → completed`, via `MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS`/`MOCK_ORDER_COMPLETED_AFTER_SECONDS` settings) rather than sitting at one value forever — there was nothing real to poll/track before this.
 
-Use **Django REST Framework** for the API surface Next.js talks to; use **Django Channels** (or simple polling to start) for pushing live trip-tracking updates to the frontend without the user refreshing.
+Use **Django REST Framework** for the API surface Next.js talks to. Live-tracking delivery to the frontend is **plain polling** (`GET /api/trips/<id>/tracking/`, which syncs every leg forward server-side before returning) — Django Channels was the originally-considered alternative but polling was sufficient and simpler for this scope; revisit only if a real need for push (not just periodic pull) shows up.
 
 ## Frontend — Next.js / React
 
 - **Trip request flow**: single input (origin, destination, time, budget/preference sliders) → calls Django's planning endpoint → renders ranked itinerary options.
-- **Itinerary view**: visualize the multi-leg plan (map + timeline), showing which BPP/mode serves each leg and live price/availability.
-- **Booking flow**: confirm → per-leg booking status, with clear UI for the async nature of ONDC confirms (this isn't instant, and legs can fail independently — the UI needs to represent partial-success states honestly, not just spinner-then-done).
-- **Live tracking**: once booked, poll or subscribe to leg status/location updates.
+- **Itinerary view**: ranked multi-leg cards showing which BPP/mode serves each leg and its price.
+- **Booking flow**: confirm → per-leg booking status, with clear UI for the async nature of ONDC confirms (this isn't instant, and legs can fail independently — the UI represents partial-success states honestly, not just spinner-then-done).
+- **Live tracking — built 2026-09-10**: once booked, the frontend auto-polls `GET /api/trips/<id>/tracking/` and renders a live, per-leg timeline (mode, places, provider, a color-coded status badge), stopping once every leg reaches a terminal state. Not a map — a real map/route visualization remains a nice-to-have, not built.
 - Use Next.js API routes only as a thin proxy/BFF if you need to hide Django's internal URL or add auth-session handling; keep real logic in Django.
 
 ## Database — Turso (libSQL)

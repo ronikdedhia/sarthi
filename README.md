@@ -2,11 +2,11 @@
 
 **Plan and book a multi-leg trip across every ONDC mobility seller at once — auto, metro, intercity bus, or flight, composed into ranked itineraries instead of five separate single-mode apps.**
 
-Give it an origin and destination and Sarthi fans real, signed ONDC-shaped `search` calls out across all three mobility domains (ride-hailing, metro/bus, intercity), builds a leg graph out of every real offer that comes back, and ranks genuine multi-leg itineraries by cost vs. speed — e.g. an auto+metro+intercity-bus+cab route for ₹1209/~7h next to a cab+flight+cab route for ₹4549/2.5h. Book the one you want and it drives the real `select → init → confirm` sequence for every leg in order, surfacing clearly (not silently) if one leg's price or availability changed mid-booking.
+Give it an origin and destination and Sarthi fans real, signed ONDC-shaped `search` calls out across all three mobility domains (ride-hailing, metro/bus, intercity), builds a leg graph out of every real offer that comes back, and ranks genuine multi-leg itineraries by cost vs. speed — e.g. an auto+metro+intercity-bus+cab route for ₹1209/~7h next to a cab+flight+cab route for ₹4549/2.5h. Book the one you want and it drives the real `select → init → confirm` sequence for every leg in order, surfacing clearly (not silently) if one leg's price or availability changed mid-booking — then watch every leg's status genuinely progress (`confirmed → in_progress → completed`) live, both in the UI and via a background worker that keeps the trip's real state current whether or not anyone's watching.
 
 ## What's actually built vs. planned
 
-This repo implements **BUILD_PLAN.md's Phase 0 through Phase 2**: multi-domain (TRV10 ride-hailing + TRV11 metro/bus + TRV12 intercity) search, a real leg-graph/multi-objective itinerary search (`trip_planner/planner.py`), and multi-leg booking with partial-failure handling — end to end and fully tested (42 backend tests). The original single-domain, single-leg flow from Phase 1 (`POST /api/trips/search/` + `/<id>/book/`) is still there, untouched, underneath the new multi-modal one. **Not yet built**: live tracking/polling of booking status pushed to the frontend, and real ONDC registry access — see [`BUILD_PLAN.md`](./BUILD_PLAN.md) Phase 3+ for that roadmap.
+This repo implements **BUILD_PLAN.md's Phase 0 through Phase 3**: multi-domain (TRV10 ride-hailing + TRV11 metro/bus + TRV12 intercity) search, a real leg-graph/multi-objective itinerary search (`trip_planner/planner.py`), multi-leg booking with partial-failure handling, and live per-leg status tracking backed by a real background worker — end to end and fully tested (60 backend tests). The original single-domain, single-leg flow from Phase 1 (`POST /api/trips/search/` + `/<id>/book/`) is still there, untouched, underneath the new multi-modal one. **Not yet built**: real ONDC registry access — see [`BUILD_PLAN.md`](./BUILD_PLAN.md) Phase 4 for that roadmap. One honest dead end along the way: [opendata.ondc.org/mobility](https://opendata.ondc.org/mobility), hoped to seed more realistic demo data, doesn't resolve at all — see `BUILD_PLAN.md`'s Phase 3 notes.
 
 ## Why ONDC, and the one honest simplification
 
@@ -14,9 +14,10 @@ ONDC's mobility domains (TRV10 ride-hailing, TRV11 metro/bus, TRV12 intercity) a
 
 ## Stack
 
-- **Backend**: Django + Django REST Framework. Four apps: `ondc_adapter` (Beckn protocol client + Ed25519 signing/verification, domain-aware across TRV10/11/12), `mock_bpp` (the simulated multi-domain seller), `trip_planner` (the leg-graph/multi-objective itinerary search — the real intellectual core), `bookings` (Trip/TripLeg/Booking/TrackingEvent models + the booking state machine, now multi-leg).
+- **Backend**: Django + Django REST Framework. Four apps: `ondc_adapter` (Beckn protocol client + Ed25519 signing/verification, domain-aware across TRV10/11/12), `mock_bpp` (the simulated multi-domain seller, whose confirmed orders now genuinely progress `confirmed → in_progress → completed` over real elapsed time), `trip_planner` (the leg-graph/multi-objective itinerary search — the real intellectual core), `bookings` (Trip/TripLeg/Booking/TrackingEvent models + the booking state machine, now multi-leg, plus `sync_booking_status`/`sync_trip_tracking` which pull the BPP's real current status and advance Sarthi's own DB to match).
+- **Background worker**: `python manage.py poll_bookings` (`--interval`/`--once`) — polls every non-terminal booking on its own cadence, independent of any open browser tab, so a trip's tracked state stays current even with nobody watching.
 - **Database**: **Turso** (`django-pyturso`, an embedded-libSQL Django backend) — confirmed working against real migrations, UUIDField/JSONField/DecimalField models, and FK constraints (see `FEASIBILITY_RESEARCH.md` §5 for what was uncertain going in). `DJANGO_DB_ENGINE=django.db.backends.sqlite3` falls back to plain SQLite if needed.
-- **Frontend**: Next.js (App Router) + Tailwind. One page: origin/destination + cheapest/balanced/fastest preference → ranked multi-leg itinerary cards → book one → per-leg confirmation status.
+- **Frontend**: Next.js (App Router) + Tailwind. One page: origin/destination + cheapest/balanced/fastest preference → ranked multi-leg itinerary cards → book one → a live, auto-polling per-leg timeline (mode, places, provider, color-coded status) that stops polling once every leg reaches a terminal state.
 
 ## Running it locally
 
@@ -49,7 +50,7 @@ cd backend && source .venv/bin/activate
 python -m pytest
 ```
 
-42 tests, all passing as of this commit — signing (sign/verify round trips, tamper detection, expired windows), multi-domain search + independent per-leg select→init→confirm cycles over a real HTTP socket (`LiveServerTestCase`, not mocked), the leg-graph/multi-objective ranking logic (pure, DB-free, crafted-graph tests proving the cost/time trade-off actually holds), the booking state machine (legal/illegal transitions), multi-leg itinerary booking including a real partial-failure scenario, and the real DRF API endpoints end to end (`/api/trips/plan/`, `/api/trips/<id>/book_itinerary/`, plus the original Phase 1 endpoints).
+60 tests, all passing as of this commit — signing (sign/verify round trips, tamper detection, expired windows), multi-domain search + independent per-leg select→init→confirm cycles over a real HTTP socket (`LiveServerTestCase`, not mocked), the leg-graph/multi-objective ranking logic (pure, DB-free, crafted-graph tests proving the cost/time trade-off actually holds), the booking state machine (legal/illegal transitions), multi-leg itinerary booking including a real partial-failure scenario, and the real DRF API endpoints end to end (`/api/trips/plan/`, `/api/trips/<id>/book_itinerary/`, `/api/trips/<id>/tracking/`, plus the original Phase 1 endpoints). Two tests prove genuine status progression over *real* elapsed time through the real HTTP stack (thresholds shrunk to ~1s via `override_settings`), not a mocked single-state check.
 
 ### Try it against the demo route network
 
@@ -60,6 +61,6 @@ The mock catalog only knows a small fixed set of named places (not arbitrary geo
 | File | Contents |
 |---|---|
 | [`FEASIBILITY_RESEARCH.md`](./FEASIBILITY_RESEARCH.md) | What's actually live on ONDC's MTT domain, and the real constraints (NP registration, signing, settlement) |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Full system design — `trip_planner`'s leg-graph search (Phase 2, built) and what's still Phase 3+ |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Full system design — `trip_planner`'s leg-graph search and the live-tracking pipeline (both built) and what's still Phase 4+ |
 | [`API_INTEGRATIONS.md`](./API_INTEGRATIONS.md) | Every external API/service, what's needed, what's gated |
-| [`BUILD_PLAN.md`](./BUILD_PLAN.md) | The phased roadmap — Phase 0 through Phase 2 done, Phase 3+ (live tracking, real registry) ahead |
+| [`BUILD_PLAN.md`](./BUILD_PLAN.md) | The phased roadmap — Phase 0 through Phase 3 done, Phase 4 (real registry access) ahead |

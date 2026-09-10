@@ -1,8 +1,99 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+// BUILD_PLAN.md Phase 3: live tracking. Matches poll_bookings' own default
+// DEFAULT_POLL_INTERVAL_SECONDS -- no reason for the frontend to poll faster than the
+// backend worker itself advances state.
+const TRACKING_POLL_INTERVAL_MS = 3000;
+const TERMINAL_STATUSES = new Set(["completed", "cancelled", "failed"]);
+
+const STATUS_STYLES = {
+  confirmed: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  in_progress: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
+  completed: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
+  cancelled: "bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
+  failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
+};
+
+function StatusBadge({ status }) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-xs font-medium capitalize ${
+        STATUS_STYLES[status] || STATUS_STYLES.confirmed
+      }`}
+    >
+      {status.replace("_", " ")}
+    </span>
+  );
+}
+
+// Live itinerary timeline -- polls GET /api/trips/<tripId>/tracking/ on an interval
+// (each poll actually SYNCS every leg's Booking forward server-side, not just reads it —
+// see bookings.services.sync_trip_tracking) and stops once every leg has reached a
+// terminal status, so an idle tab isn't polling forever after a trip is fully done.
+function TripTimeline({ tripId }) {
+  const [legs, setLegs] = useState(null);
+  const [error, setError] = useState(null);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/trips/${tripId}/tracking/`);
+        const body = await response.json();
+        if (cancelled) return;
+        if (!response.ok) {
+          setError(body.error || "tracking unavailable");
+          return;
+        }
+        setError(null);
+        setLegs(body.legs);
+        if (body.legs.length > 0 && body.legs.every((leg) => TERMINAL_STATUSES.has(leg.status))) {
+          clearInterval(intervalRef.current);
+        }
+      } catch {
+        if (!cancelled) setError("could not reach the Sarthi backend");
+      }
+    }
+
+    poll(); // first poll immediately, don't wait a full interval to show anything
+    intervalRef.current = setInterval(poll, TRACKING_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalRef.current);
+    };
+  }, [tripId]);
+
+  if (error) {
+    return <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>;
+  }
+  if (!legs) {
+    return <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-500">Loading live status…</p>;
+  }
+
+  return (
+    <ol className="mt-3 flex flex-col gap-2 border-l-2 border-zinc-200 pl-4 dark:border-zinc-800">
+      {legs.map((leg) => (
+        <li key={leg.booking_id} className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs font-medium uppercase text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+            {leg.mode}
+          </span>
+          <span className="text-zinc-700 dark:text-zinc-300">
+            {leg.from_place} → {leg.to_place}
+          </span>
+          <span className="text-zinc-500 dark:text-zinc-500">({leg.provider_name})</span>
+          <StatusBadge status={leg.status} />
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 // BUILD_PLAN.md Phase 2: ranked multi-leg itinerary comparison, replacing Phase 1's
 // single-domain "one search -> one bookable leg" flow (still available on the backend
@@ -189,16 +280,13 @@ export default function Home() {
                   >
                     <p className="font-medium">
                       {bookingState.result.fully_booked
-                        ? "All legs confirmed"
+                        ? "All legs confirmed — tracking live status below"
                         : `Leg ${bookingState.result.failed_leg_index + 1} failed at "${bookingState.result.failure.step}" — ${bookingState.result.bookings.length} leg(s) confirmed before it, ${bookingState.result.legs_not_attempted} never attempted`}
                     </p>
-                    <ul className="mt-1 flex flex-col gap-0.5">
-                      {bookingState.result.bookings.map((b, i) => (
-                        <li key={i}>
-                          Leg {i + 1}: {b.status} — order {b.order_id}
-                        </li>
-                      ))}
-                    </ul>
+
+                    {bookingState.result.bookings.length > 0 && (
+                      <TripTimeline tripId={bookingState.result.trip_id} />
+                    )}
                   </div>
                 )}
               </li>

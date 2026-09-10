@@ -11,7 +11,7 @@ Every external dependency Sarthi needs, why, and how hard it is to get access.
 | **Mobility domain APIs — TRV10 (ride-hailing), TRV11 (metro/intracity bus), TRV12 (intercity bus/flight)** | The actual `search/select/init/confirm/status/track/update/cancel` transaction flow per mode | Spec is fully public: [ONDC-Official/mobility-specification](https://github.com/ONDC-Official/mobility-specification) |
 | **ONDC mock server** | Build/test the full protocol flow with zero registry approval needed | Public, no approval needed: [ondc-mock-server](https://github.com/ONDC-Official/ondc-mock-server) |
 | **Pramaan test bench** | ONDC's own certification/integration tool, covers TRV10/11/12 flows explicitly | Public: [pramaan.ondc.org](https://pramaan.ondc.org/), [repo](https://github.com/ONDC-Official/pramaan) |
-| **opendata.ondc.org/mobility** | Real, public dataset of ONDC mobility orders — good for seeding realistic demo scenarios | Public, no auth: [opendata.ondc.org/mobility](https://opendata.ondc.org/mobility) |
+| **opendata.ondc.org/mobility** | Hoped to be a real public dataset for seeding realistic demo scenarios | **Dead end, checked 2026-09-10**: the subdomain does not resolve at all (confirmed not a general network issue — `ondc.org`/`www.ondc.org` resolve fine from the same environment). Not usable; the hand-built demo route catalog was kept as-is rather than replaced with something that only *looks* more "real." |
 
 **Build order**: mock server + Pramaan first (zero-approval, fully public) → apply for staging registry access in parallel as a stretch goal, not a blocker.
 

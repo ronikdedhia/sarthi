@@ -26,11 +26,17 @@ Phased so you always have something demoable, and so the ONDC registry-approval 
 
 42 backend tests passing as of this phase (up from 17 at the end of Phase 1).
 
-## Phase 3 — Live tracking & polish
+## Phase 3 — Live tracking & polish — ✅ done 2026-09-10
 
-- [ ] Background workers polling/subscribing to `status`/`track` callbacks, pushed to the frontend live.
-- [ ] Itinerary timeline/map visualization.
-- [ ] Seed realistic demo data from [opendata.ondc.org/mobility](https://opendata.ondc.org/mobility) so the demo doesn't feel synthetic.
+- [x] **Live status progression, not just a static "confirmed" forever.** `mock_bpp.store` now computes a confirmed order's status from real elapsed time (`confirmed` → `in_progress` → `completed`, via `settings.MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS`/`MOCK_ORDER_COMPLETED_AFTER_SECONDS`, default 8s/20s) instead of sitting at one value indefinitely — a real BPP's own order lifecycle, simulated on a human-watchable timescale rather than waiting out a real ETA.
+- [x] **`bookings.services.sync_booking_status`/`sync_trip_tracking`** poll the (mock) BPP's real current status and advance the `Booking` state machine to match, recording a `TrackingEvent` per real transition — this is what makes Sarthi's *own* DB progress, not just what the BPP reports in isolation (which `booking_status` already did but never applied). Idempotent and safe under concurrent callers: a same-or-stale status is a silent no-op, and an out-of-order transition the state machine would refuse is swallowed, not raised.
+- [x] **New endpoint `GET /api/trips/<id>/tracking/`** — the one call the frontend polls to get a whole itinerary's current per-leg state in one round trip; each poll actually syncs every leg forward server-side first.
+- [x] **Real background worker**: `python manage.py poll_bookings` (`--interval`, `--once`) — polls every non-terminal `Booking` on its own cadence, independent of any browser tab being open, matching this phase's literal ask ("background workers polling ... pushed to the frontend live"). The frontend's own poll and this worker are both safe to run at once (idempotent, see above) and serve different purposes: the worker keeps the DB itself current regardless of whether anyone's watching; the frontend poll is what one open tab sees.
+- [x] **Frontend timeline**: the booking view now shows a live, auto-polling per-leg timeline (mode, places, provider, a color-coded status badge) that stops polling once every leg reaches a terminal state — not a map, but a real, live-updating visualization, which was the actual ask ("even an abstract line/route diagram counts").
+- [x] Real tests throughout, including two that prove genuine progression over REAL elapsed time through the REAL HTTP stack (not a mocked single-state check): `bookings/tests/test_services.py`'s `SyncBookingStatusIntegrationTests` and `bookings/tests/test_views.py`'s `TripTrackingApiTests` both shrink the progression thresholds to ~1s via `override_settings` and `time.sleep()` across real polls. Confirmed live too, against the actual running dev server (not just pytest): a real 4-leg Koramangala→T Nagar itinerary booked, then genuinely progressed `confirmed` → `in_progress` → `completed` across three real polls a few seconds apart.
+- [~] **`opendata.ondc.org/mobility` is a dead end, not silently skipped**: the subdomain does not resolve at all (`curl`: `Could not resolve host`), confirmed not a general network issue (`ondc.org`/`www.ondc.org` resolve fine from the same environment). No real dataset was reachable to seed from. The existing hand-built route catalog (Phase 2) already uses plausible real-world-shaped fares (auto ₹90, metro ₹40, intercity bus ₹899, flight ₹3499) — left as-is rather than replaced with something that only *looks* more "real" without actually being sourced from real data.
+
+60 backend tests passing as of this phase (up from 42 at the end of Phase 2).
 
 ## Phase 4 — Stretch: real network access
 
@@ -38,6 +44,8 @@ Phased so you always have something demoable, and so the ONDC registry-approval 
 - [ ] If/when approved: swap the mock-server config for the real staging gateway — this should be a config change only if `ondc_adapter`'s internal interface was kept clean, per the architecture doc's isolation principle.
 - [ ] Do **not** treat this phase as required for the project to be "done" — a fully working mock-server-backed demo with a real optimization engine is already a complete, demoable, resume-worthy project on its own.
 
-## What "done" looks like for a resume/portfolio pass
+## What "done" looks like for a resume/portfolio pass — ✅ achieved as of Phase 3
 
-A live demo where: you type a multi-city, multi-modal trip request → Sarthi shows 2-3 ranked itinerary options spanning auto + metro + intercity bus/flight from *different, independent* ONDC seller apps → you book one → you watch live status updates as each leg progresses → if a leg's price/availability changes mid-booking, the system replans rather than failing silently. That's the whole pitch, and none of it requires real registry access to prove.
+A live demo where: you type a multi-city, multi-modal trip request → Sarthi shows 2-3 ranked itinerary options spanning auto + metro + intercity bus/flight from *different, independent* ONDC seller apps → you book one → you watch live status updates as each leg progresses (`confirmed` → `in_progress` → `completed`, polling `GET /api/trips/<id>/tracking/`) → if a leg's price/availability changes mid-booking, the system surfaces exactly which leg and why rather than failing silently or half-booking. All of this is real, tested, and confirmed live against the running dev server — none of it requires real registry access.
+
+One correction to this paragraph's original wording: "replans" was always aspirational, not built — Phase 2's `book_itinerary` was explicit that automatic re-planning around a failed leg is real Phase 3+ scope, and it still isn't built (Phase 3's actual scope, per the checklist above, was live tracking — see Phase 4+ or a future phase for replanning specifically).
