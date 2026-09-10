@@ -12,7 +12,9 @@ class BookLegIntegrationTests(LiveServerTestCase):
     select/init/confirm calls -> Booking ends up STATUS_CONFIRMED with a real order id."""
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_booking_a_searched_offer_reaches_confirmed(self):
         trip = Trip.objects.create(origin="Koramangala", destination="Chennai Airport")
@@ -46,7 +48,9 @@ class BookItineraryIntegrationTests(LiveServerTestCase):
     domain/transaction_id) in order -- the multi-leg counterpart to book_leg above."""
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_every_leg_confirms_when_all_are_bookable(self):
         trip = Trip.objects.create(origin="Koramangala", destination="T Nagar")
@@ -99,16 +103,23 @@ class BookItineraryIntegrationTests(LiveServerTestCase):
         assert Booking.objects.filter(trip_leg__trip=trip).count() == 2
 
 
-@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=1)
+@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=2,
+                    MOCK_BPP_CALLBACK_DELAY_SECONDS=0.02)
 class SyncBookingStatusIntegrationTests(LiveServerTestCase):
     """BUILD_PLAN.md Phase 3: sync_booking_status/sync_trip_tracking actually advance
     Sarthi's own Booking rows over REAL elapsed time and REAL polls through the full HTTP
-    stack -- not a mocked single-state check. Thresholds shrunk to 1s+1s via
-    override_settings so this doesn't need to wait out the real (demo-friendly but still
-    several-second) defaults."""
+    stack -- not a mocked single-state check. Thresholds shrunk via override_settings so
+    this doesn't need to wait out the real (demo-friendly but still several-second)
+    defaults -- widened to 1s/3s (not 1s/1s) 2026-09-10 once the async callback rework
+    (BUILD_PLAN.md Phase 4 readiness) added its own real per-call latency
+    (MOCK_BPP_CALLBACK_DELAY_SECONDS plus poll overhead): a multi-leg itinerary's
+    sequential per-leg sync compounds that latency, and a too-tight margin was
+    confirmed flaky against it -- this margin held reliably across repeated runs."""
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def _book_one_leg(self, trip):
         with self._gateway_url_override():
@@ -128,11 +139,11 @@ class SyncBookingStatusIntegrationTests(LiveServerTestCase):
             unchanged = sync_booking_status(booking)
             assert unchanged.status == Booking.STATUS_CONFIRMED  # too soon to have advanced
 
-            time.sleep(1.2)
+            time.sleep(1.5)
             advanced = sync_booking_status(booking)
             assert advanced.status == Booking.STATUS_IN_PROGRESS
 
-            time.sleep(1.2)
+            time.sleep(2.0)
             completed = sync_booking_status(booking)
             assert completed.status == Booking.STATUS_COMPLETED
 

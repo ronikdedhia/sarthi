@@ -20,6 +20,7 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('mock_bpp/', include('mock_bpp.urls')),
+    path('ondc_adapter/', include('ondc_adapter.urls')),
     path('api/trips/', include('trip_planner.urls')),
     path('api/trips/', include('bookings.urls')),
 ]

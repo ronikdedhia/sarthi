@@ -11,7 +11,9 @@ from ondc_adapter.client import OndcRequestError
 
 class SearchSelectInitConfirmFlowTests(LiveServerTestCase):
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_search_returns_offers_from_both_mock_providers(self):
         with self._gateway_url_override():
@@ -47,7 +49,9 @@ class MultiDomainSearchTests(LiveServerTestCase):
     """BUILD_PLAN.md Phase 2: TRV11 (metro/bus) and TRV12 (intercity) alongside TRV10."""
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_trv11_search_returns_metro_offers_with_place_and_mode(self):
         with self._gateway_url_override():

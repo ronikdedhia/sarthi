@@ -12,7 +12,9 @@ class PlanApiTests(LiveServerTestCase):
         self.api = APIClient()
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_plan_returns_at_least_two_ranked_multi_domain_itineraries(self):
         """Koramangala -> T Nagar has (at least) two real independent routes in the demo

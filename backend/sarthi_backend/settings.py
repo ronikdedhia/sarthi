@@ -128,9 +128,32 @@ MOCK_ORDER_COMPLETED_AFTER_SECONDS = int(os.environ.get('MOCK_ORDER_COMPLETED_AF
 # Points at THIS SAME server's /mock_bpp/ endpoints — see FEASIBILITY_RESEARCH.md #3
 # and mock_bpp/README.md for why: no ONDC registry approval exists to point at a real
 # gateway yet, so ondc_adapter.client talks to a same-process simulated seller instead.
-# Swapping this for the real ONDC gateway later is a config change, not a rewrite —
-# see ARCHITECTURE.md's isolation principle.
+# Swapping this URL for a real ONDC gateway's is a config change; see BUILD_PLAN.md
+# Phase 4's readiness note for the ONE thing that's NOT just config (registering a real
+# subscriber_id/FQDN so a real gateway can resolve where to send its own on_* callbacks).
 ONDC_GATEWAY_BASE_URL = os.environ.get('ONDC_GATEWAY_BASE_URL', 'http://localhost:8000/mock_bpp')
+
+# 2026-09-10 (BUILD_PLAN.md Phase 4 readiness): the real Beckn/ONDC protocol is
+# asynchronous -- search()/select()/init()/confirm()/get_status() each get a bare ACK
+# immediately, then the real result arrives later as a SEPARATE POST (on_search, etc.) to
+# the caller's own registered callback base URL, carried in the outbound request's own
+# context.bap_uri field. SARTHI_BASE_URL is what this project advertises as that bap_uri
+# -- ondc_adapter/urls.py's on_search/on_select/on_init/on_confirm/on_status are where a
+# real gateway (or, today, mock_bpp) actually calls back to. Must be a real,
+# externally-reachable URL for real registry use (part of the FQDN/SSL requirement, see
+# FEASIBILITY_RESEARCH.md #2) -- localhost is only meaningful for local dev/tests, which
+# override it to LiveServerTestCase's own live_server_url (see ondc_adapter/tests).
+SARTHI_BASE_URL = os.environ.get('SARTHI_BASE_URL', 'http://localhost:8000')
+
+# How long mock_bpp deliberately waits before calling back — real (not zero) so the
+# async round trip is genuinely exercised, short enough to stay human-watchable. Tests
+# override this even shorter via override_settings.
+MOCK_BPP_CALLBACK_DELAY_SECONDS = float(os.environ.get('MOCK_BPP_CALLBACK_DELAY_SECONDS', '0.3'))
+
+# How long a client.py call will poll ondc_adapter's CallbackRecord table for the
+# matching on_* callback before giving up with OndcRequestError. Must comfortably exceed
+# MOCK_BPP_CALLBACK_DELAY_SECONDS (or a real gateway's real latency).
+ONDC_CALLBACK_TIMEOUT_SECONDS = float(os.environ.get('ONDC_CALLBACK_TIMEOUT_SECONDS', '5'))
 
 
 # Database

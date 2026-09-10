@@ -40,9 +40,52 @@ Phased so you always have something demoable, and so the ONDC registry-approval 
 
 ## Phase 4 — Stretch: real network access
 
-- [ ] Apply for ONDC staging registry access in parallel with Phases 1–3 (manual approval process, start it early since it's out of your control).
-- [ ] If/when approved: swap the mock-server config for the real staging gateway — this should be a config change only if `ondc_adapter`'s internal interface was kept clean, per the architecture doc's isolation principle.
-- [ ] Do **not** treat this phase as required for the project to be "done" — a fully working mock-server-backed demo with a real optimization engine is already a complete, demoable, resume-worthy project on its own.
+**Readiness work done 2026-09-10; actual registration NOT done** — that part needs a real
+business entity + domain, which didn't exist as of this pass (see
+[`PHASE4_REGISTRATION_GUIDE.md`](./PHASE4_REGISTRATION_GUIDE.md) for exactly what to do
+once they do). What "readiness" means concretely, and why it turned out to be more than
+config:
+
+- [x] **Codebase audit found the "swap the gateway URL, it's just config" claim was
+  FALSE as written** — `ondc_adapter.client` and `mock_bpp` were both fully
+  *synchronous* (a `search` call got the real catalog back in the same HTTP response).
+  The real Beckn/ONDC protocol is asynchronous: a `search` (etc.) gets a bare ACK
+  immediately, and the real result arrives later via a SEPARATE POST (`on_search`, etc.)
+  to the BAP's own registered callback URL. Pointing the old code at a real gateway
+  would have broken immediately (it would try to parse a catalog out of a bare ACK).
+- [x] **Built the missing half for real**: `ondc_adapter/models.py`'s `CallbackRecord` +
+  `ondc_adapter/views.py`'s real `on_search`/`on_select`/`on_init`/`on_confirm`/
+  `on_status` endpoints (signature-verified, same as every other endpoint in this repo) +
+  `ondc_adapter/client.py`'s `_post_and_await_callback`/`_await_callback` (ACK, then poll
+  for the real callback). `mock_bpp` rewritten to match: it now ACKs immediately and
+  calls back after a real, deliberate `MOCK_BPP_CALLBACK_DELAY_SECONDS` delay, so the
+  async round trip is genuinely exercised in dev/tests, not just plumbing nobody calls.
+  The claim now actually holds: `ONDC_GATEWAY_BASE_URL`/`SARTHI_BASE_URL` are genuinely
+  config-only to point this at a real gateway later.
+- [x] **Two real bugs found and fixed by actually building this, not just planning it**:
+  (1) a genuine race — `CallbackRecord` keyed only by `(transaction_id, action)` let a
+  repeated call of the same action (e.g. `get_status` polled twice, exactly what live
+  tracking does) match a STALE record from the first call before the new callback for the
+  second had arrived; fixed by correlating on `(transaction_id, action, message_id)`, a
+  fresh id per call, per Beckn's own convention. (2) real SQLite/Turso lock contention
+  (`database is locked`) once two genuinely concurrent DB writers existed (the original
+  request's thread and the callback's own thread) — fixed with a short, standard retry,
+  not papered over. Both are exactly the kind of thing "just swap the config" would have
+  hidden until a real gateway was already in the picture.
+- [x] Real tests: `ondc_adapter/tests/test_callbacks.py` proves the ACK is genuinely bare
+  (not the catalog smuggled in), the real callback arrives as a separate POST, and
+  includes a regression test for the message_id race above. All existing timing-sensitive
+  tests' margins were re-validated (and widened where a real run showed flakiness) against
+  the async rework's own added latency.
+- [x] [`PHASE4_REGISTRATION_GUIDE.md`](./PHASE4_REGISTRATION_GUIDE.md): concrete,
+  verified (not guessed) steps for actual registration — notably, a sole proprietorship
+  with GST is enough to qualify, not an LLP/Pvt Ltd.
+- [ ] **Actual registration**: not started — no business entity or domain existed as of
+  this pass. Apply in parallel with using the project, not as a blocker; a fully working
+  mock-backed demo with a real optimization engine and now a real async protocol
+  implementation is already a complete, demoable, resume-worthy project on its own.
+
+65 backend tests passing as of this phase (up from 60 at the end of Phase 3).
 
 ## What "done" looks like for a resume/portfolio pass — ✅ achieved as of Phase 3
 

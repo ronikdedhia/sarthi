@@ -9,7 +9,9 @@ class TripSearchAndBookApiTests(LiveServerTestCase):
         self.api = APIClient()
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_search_then_book_then_check_status_over_the_real_api(self):
         with self._gateway_url_override():
@@ -55,7 +57,9 @@ class BookItineraryApiTests(LiveServerTestCase):
         self.api = APIClient()
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_plan_then_book_the_top_ranked_itinerary_over_the_real_api(self):
         with self._gateway_url_override():
@@ -88,16 +92,22 @@ class BookItineraryApiTests(LiveServerTestCase):
         assert response.status_code == 400
 
 
-@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=1)
+@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=2,
+                    MOCK_BPP_CALLBACK_DELAY_SECONDS=0.02)
 class TripTrackingApiTests(LiveServerTestCase):
     """BUILD_PLAN.md Phase 3: GET /api/trips/<id>/tracking/ -- the endpoint the frontend's
-    live itinerary timeline polls. Real elapsed time, real HTTP round trip."""
+    live itinerary timeline polls. Real elapsed time, real HTTP round trip. Thresholds
+    widened to 1s/3s (not 1s/1s) 2026-09-10 -- confirmed flaky at the tighter margin once
+    the async callback rework (Phase 4 readiness) added its own real per-leg latency that
+    a 2-leg itinerary's SEQUENTIAL sync compounds."""
 
     def setUp(self):
         self.api = APIClient()
 
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def test_tracking_reflects_both_legs_progressing_to_in_progress_over_real_time(self):
         import time
@@ -119,7 +129,7 @@ class TripTrackingApiTests(LiveServerTestCase):
             assert len(first_poll.data["legs"]) == itinerary["leg_count"]
             assert all(leg["status"] == "confirmed" for leg in first_poll.data["legs"])
 
-            time.sleep(1.2)
+            time.sleep(2.0)
             second_poll = self.api.get(f"/api/trips/{trip_id}/tracking/")
 
         assert all(leg["status"] == "in_progress" for leg in second_poll.data["legs"])

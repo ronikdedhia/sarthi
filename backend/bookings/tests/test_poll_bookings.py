@@ -11,10 +11,13 @@ from bookings.services import book_leg
 from ondc_adapter import client
 
 
-@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=1)
+@override_settings(MOCK_ORDER_IN_PROGRESS_AFTER_SECONDS=1, MOCK_ORDER_COMPLETED_AFTER_SECONDS=2,
+                    MOCK_BPP_CALLBACK_DELAY_SECONDS=0.02)
 class PollBookingsCommandTests(LiveServerTestCase):
     def _gateway_url_override(self):
-        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+        return override_settings(
+            ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp", SARTHI_BASE_URL=self.live_server_url,
+        )
 
     def _book_one_leg(self, trip):
         with self._gateway_url_override():
@@ -30,7 +33,7 @@ class PollBookingsCommandTests(LiveServerTestCase):
         booking = self._book_one_leg(trip)
 
         with self._gateway_url_override():
-            time.sleep(1.2)
+            time.sleep(2.0)
             checked = run_poll_pass()
 
         assert checked == 1
