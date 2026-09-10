@@ -1,0 +1,9 @@
+django
+djangorestframework
+django-cors-headers
+django-pyturso
+pynacl
+requests
+python-dotenv
+pytest
+pytest-django

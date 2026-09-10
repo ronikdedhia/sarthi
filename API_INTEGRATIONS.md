@@ -1,0 +1,54 @@
+# API & Service Integrations
+
+Every external dependency Sarthi needs, why, and how hard it is to get access.
+
+## 1. ONDC / Beckn protocol (core dependency)
+
+| What | Why | Access difficulty |
+|---|---|---|
+| **ONDC Registry** (subscriber lookup/onboarding) | Required to be a real Network Participant and discover BPPs on the network | **Hard** — needs FQDN+SSL, Ed25519 keypair, manual registrar approval. See [FEASIBILITY_RESEARCH.md §2](./FEASIBILITY_RESEARCH.md#2-the-hard-constraint-becoming-a-network-participant-np-is-not-developer-self-serve) |
+| **ONDC Gateway** (routes `search` broadcasts to relevant BPPs) | The entry point for discovering ride/metro/bus/flight options across sellers | Same registry gating as above |
+| **Mobility domain APIs — TRV10 (ride-hailing), TRV11 (metro/intracity bus), TRV12 (intercity bus/flight)** | The actual `search/select/init/confirm/status/track/update/cancel` transaction flow per mode | Spec is fully public: [ONDC-Official/mobility-specification](https://github.com/ONDC-Official/mobility-specification) |
+| **ONDC mock server** | Build/test the full protocol flow with zero registry approval needed | Public, no approval needed: [ondc-mock-server](https://github.com/ONDC-Official/ondc-mock-server) |
+| **Pramaan test bench** | ONDC's own certification/integration tool, covers TRV10/11/12 flows explicitly | Public: [pramaan.ondc.org](https://pramaan.ondc.org/), [repo](https://github.com/ONDC-Official/pramaan) |
+| **opendata.ondc.org/mobility** | Real, public dataset of ONDC mobility orders — good for seeding realistic demo scenarios | Public, no auth: [opendata.ondc.org/mobility](https://opendata.ondc.org/mobility) |
+
+**Build order**: mock server + Pramaan first (zero-approval, fully public) → apply for staging registry access in parallel as a stretch goal, not a blocker.
+
+## 2. Signing / cryptography
+
+- **Ed25519 signing** — every ONDC request/callback must be signed and verified (Blake2b payload hashing). This isn't a third-party API, it's a library-level requirement (`PyNaCl` or similar in Python) implemented inside the `ondc_adapter` Django app per the [signing-verification spec](https://github.com/ONDC-Official/developer-docs/blob/main/registry/signing-verification.md).
+- No external account needed for dev/mock-server work; only needed for real registry registration (self-signed cert + keypair you generate yourself).
+
+## 3. Maps / geocoding / routing (supplementary — ONDC doesn't provide this)
+
+ONDC's `search` gives you candidate legs from BPPs, but it does **not** give you geocoding (turning "Koramangala" into coordinates) or walking/transfer-time estimation between legs (e.g., time to walk from a bus stop to a metro entrance). You need a separate mapping API for:
+- Geocoding free-text origin/destination into coordinates.
+- Estimating transfer walk-time/distance between two leg endpoints, to know if a proposed itinerary is actually physically feasible.
+
+Options: Google Maps Platform (Directions/Distance Matrix/Geocoding APIs — paid, but has a free tier sufficient for a demo), or OpenStreetMap-based alternatives (Nominatim for geocoding, OSRM for routing — free, self-hostable, no API key management, good fit for a resume project since it avoids a billing dependency).
+
+**Recommendation**: start with OSM/Nominatim/OSRM for the demo to avoid Google API billing/key friction; note in your writeup that swapping to Google Maps is a one-line config change if higher accuracy is needed later.
+
+## 4. Payments (only needed if you go beyond mocked confirms)
+
+ONDC's Payment and Settlement Protocol lets BAP/BPP negotiate settlement bilaterally rather than mandating one gateway — see [FEASIBILITY_RESEARCH.md §4](./FEASIBILITY_RESEARCH.md#4-paymentsettlement--a-separate-real-world-constraint). For v1, mock the payment confirmation step entirely. If you later want a real-money demo, a UPI-based gateway (Razorpay, Cashfree, or Setu) would be the integration point — treat this as an explicit stretch goal, not part of the core build.
+
+## 5. Database — Turso
+
+Not a third-party "API" in the traditional sense but worth listing here since it's an external managed service: [Turso](https://turso.tech) (libSQL). Free tier is sufficient for a portfolio project. See [FEASIBILITY_RESEARCH.md §5](./FEASIBILITY_RESEARCH.md#5-turso--django--real-but-non-trivial-integration) for the Django integration caveats — validate `django-libsql`/`django-pyturso` against your actual model shapes on Day 1.
+
+## 6. Auth (your own users, not ONDC)
+
+Sarthi needs its own end-user auth (people planning trips) — this is unrelated to ONDC's NP-to-NP signing. Standard Django auth + DRF token/JWT (e.g. `djangorestframework-simplejwt`) is sufficient; no external identity provider is required unless you want social login for demo polish.
+
+## Summary: what's blocked vs. buildable today
+
+| Dependency | Buildable today, no approval needed |
+|---|---|
+| Mobility protocol flow (mock server + Pramaan) | ✅ Yes |
+| Trip planning/optimization engine | ✅ Yes — pure logic, no external dependency |
+| Django + Next.js + Turso stack | ✅ Yes |
+| Geocoding/routing (OSM stack) | ✅ Yes |
+| Real ONDC registry transactions | ⚠️ Gated on NP registration/approval — pursue in parallel, don't block v1 on it |
+| Real payment settlement | ⚠️ Out of scope for v1, mock it |
