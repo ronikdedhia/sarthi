@@ -45,3 +45,44 @@ class TripSearchAndBookApiTests(LiveServerTestCase):
         response = self.api.post("/api/trips/search/", {"origin": "Koramangala"}, format="json")
 
         assert response.status_code == 400
+
+
+class BookItineraryApiTests(LiveServerTestCase):
+    """End-to-end HTTP test of POST /api/trips/plan/ -> POST /api/trips/<id>/book_itinerary/
+    -- the real Phase 2 flow the frontend's itinerary view drives."""
+
+    def setUp(self):
+        self.api = APIClient()
+
+    def _gateway_url_override(self):
+        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+
+    def test_plan_then_book_the_top_ranked_itinerary_over_the_real_api(self):
+        with self._gateway_url_override():
+            plan_response = self.api.post(
+                "/api/trips/plan/", {"origin": "Koramangala", "destination": "T Nagar"}, format="json",
+            )
+            assert plan_response.status_code == 200, plan_response.data
+            itinerary = plan_response.data["itineraries"][0]
+            trip_id = plan_response.data["trip_id"]
+
+            book_response = self.api.post(
+                f"/api/trips/{trip_id}/book_itinerary/", {"legs": itinerary["legs"]}, format="json",
+            )
+
+        assert book_response.status_code == 200, book_response.data
+        assert book_response.data["fully_booked"] is True
+        assert len(book_response.data["bookings"]) == itinerary["leg_count"]
+        assert all(b["status"] == "confirmed" for b in book_response.data["bookings"])
+        assert book_response.data["failed_leg_index"] is None
+
+    def test_book_itinerary_without_legs_is_a_client_error(self):
+        with self._gateway_url_override():
+            plan_response = self.api.post(
+                "/api/trips/plan/", {"origin": "Koramangala", "destination": "T Nagar"}, format="json",
+            )
+        trip_id = plan_response.data["trip_id"]
+
+        response = self.api.post(f"/api/trips/{trip_id}/book_itinerary/", {"legs": []}, format="json")
+
+        assert response.status_code == 400

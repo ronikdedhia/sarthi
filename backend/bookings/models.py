@@ -1,7 +1,10 @@
 """Trip/booking persistence + the booking state machine (ARCHITECTURE.md's `bookings` app).
 
-Phase 1 scope only: a Trip has exactly one TripLeg (single-mode, single-leg booking —
-see BUILD_PLAN.md Phase 1). Multi-leg itineraries are Phase 2, not modeled here yet.
+Phase 1 scope was a Trip with exactly one TripLeg (single-mode, single-leg booking).
+Phase 2 (BUILD_PLAN.md) needed no schema change for a Trip to hold multiple TripLegs --
+TripLeg.trip was already a plain ForeignKey (Trip.legs), not OneToOne -- so a multi-leg
+itinerary is just several TripLeg rows sharing one Trip, booked in order by
+bookings.services.book_itinerary.
 """
 import uuid
 
@@ -21,16 +24,27 @@ class Trip(models.Model):
 
 
 class TripLeg(models.Model):
-    """One leg of a trip — Phase 1: TRV10 (ride-hailing) only, so `domain` is always
-    that, but the field exists now so Phase 2 (TRV11/TRV12) doesn't need a migration
-    just to add more values."""
+    """One leg of a trip. Phase 1 only ever created TRV10 (ride-hailing) legs; Phase 2
+    adds TRV11 (metro/intracity bus) and TRV12 (intercity bus/flight) as real choices,
+    plus `mode` (a free-text label like "metro"/"flight"/"cab" from ondc_adapter's Offer,
+    for display -- not used for any routing logic, that's trip_planner.planner's job)."""
 
     DOMAIN_RIDE_HAILING = "ONDC:TRV10"
-    DOMAIN_CHOICES = [(DOMAIN_RIDE_HAILING, "Ride hailing")]
+    DOMAIN_METRO_BUS = "ONDC:TRV11"
+    DOMAIN_INTERCITY = "ONDC:TRV12"
+    DOMAIN_CHOICES = [
+        (DOMAIN_RIDE_HAILING, "Ride hailing"),
+        (DOMAIN_METRO_BUS, "Metro / intracity bus"),
+        (DOMAIN_INTERCITY, "Intercity bus / flight"),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     trip = models.ForeignKey(Trip, on_delete=models.CASCADE, related_name="legs")
     domain = models.CharField(max_length=32, choices=DOMAIN_CHOICES, default=DOMAIN_RIDE_HAILING)
+    # Order within the trip -- Phase 1 never needed this (always exactly one leg); Phase 2
+    # itineraries are booked leg-by-leg in this order (bookings.services.book_itinerary).
+    sequence = models.PositiveIntegerField(default=0)
+    mode = models.CharField(max_length=32, blank=True, default="")
     bpp_id = models.CharField(max_length=255)
     provider_name = models.CharField(max_length=255)
     item_id = models.CharField(max_length=255)  # the ONDC catalog item this leg books
@@ -39,6 +53,9 @@ class TripLeg(models.Model):
     # raw ONDC search-result payload for this offer, for debugging/replay —
     # ARCHITECTURE.md: "store raw ONDC request/response payloads for debugging"
     raw_offer = models.JSONField()
+
+    class Meta:
+        ordering = ["sequence"]
 
     def __str__(self):
         return f"{self.provider_name} ({self.domain}) — {self.fare}"

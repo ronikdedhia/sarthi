@@ -32,11 +32,12 @@ Django owns three distinct responsibilities; keep them as separate apps so the O
    - Ed25519 key management — signing key + encryption key pair, `keyId` construction, request/response signing per the [signing-verification spec](https://github.com/ONDC-Official/developer-docs/blob/main/registry/signing-verification.md).
    - This app should be the **only** place that knows ONDC/Beckn exists — everything else talks to it through a clean internal interface (`search_trips(origin, destination, constraints) -> list[Offer]`), so swapping mock server for real registry later is a config change, not a rewrite.
 
-2. **`trip_planner`** — the actual orchestration/optimization engine, and the real intellectual core of the project:
-   - Given origin, destination, time window, and constraints (cost ceiling, max transfers, mode preferences), fan out `search` calls across relevant domains (TRV10/11/12) for candidate legs.
-   - Build a leg graph (nodes = locations/times, edges = candidate legs with cost/duration/mode) and run a multi-objective shortest-path/itinerary search (cost vs. time vs. transfer-count trade-off) — this is a real graph/optimization problem, not a for-loop.
-   - Produce ranked itinerary candidates, each a sequence of legs across potentially different BPPs.
-   - On booking, drive each leg's `select → init → confirm` sequence, handling partial failure (leg 2 confirms but leg 3's price/availability changed by the time you get to it — replan, don't just crash).
+2. **`trip_planner`** — the actual orchestration/optimization engine, and the real intellectual core of the project. **Built 2026-09-10 (BUILD_PLAN.md Phase 2):**
+   - `services.plan_itineraries(origin, destination, cost_weight, time_weight)` fans out one signed `search` per domain (TRV10/11/12, via `ondc_adapter.client.search_all_domains`) and collects every returned `Offer` as a candidate leg.
+   - `planner.py` (pure, DB-free — no Django/mock_bpp needed to test it) builds an undirected leg graph keyed by place name (`build_graph`), enumerates every simple path from origin to destination up to a leg cap via DFS (`find_itinerary_paths` — the demo catalog's graph is small enough that exhaustive enumeration is the right tool, not a heuristic), and ranks candidates by a weighted sum of normalized total fare and total duration (`rank_itineraries`) — `cost_weight`/`time_weight` let a caller trade cost off against speed, rather than the engine picking one fixed definition of "best." Confirmed live: Koramangala → T Nagar returns itineraries from ₹1209/417min (cost-weighted) to ₹4549/150min (time-weighted), correctly re-ranking when the weights flip.
+   - Produces ranked `Itinerary` objects, each an ordered sequence of legs across independent simulated BPPs and domains (auto → metro → intercity bus → cab is one real candidate; cab → flight → cab is another).
+   - On booking, `bookings.services.book_itinerary` drives each leg's `select → init → confirm` sequence in order, stopping at the first failing leg — see BUILD_PLAN.md Phase 2 for why this surfaces clearly (which legs confirmed, which failed and how, which were never attempted) rather than auto-replanning; that's real Phase 3+ scope.
+   - Not yet built: constraint inputs (cost ceiling, max transfers, mode preferences, a real time window) beyond the cost/time weighting — `plan_itineraries` takes origin/destination/weights only today.
 
 3. **`bookings`** — the persistence + state machine layer:
    - Trip, Leg, Booking, TrackingEvent models.

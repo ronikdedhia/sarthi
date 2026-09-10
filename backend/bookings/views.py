@@ -5,7 +5,7 @@ from ondc_adapter import client as ondc_client
 from ondc_adapter.client import OndcRequestError
 
 from .models import Booking, Trip
-from .services import BookingFailedError, book_leg
+from .services import BookingFailedError, book_itinerary, book_leg
 
 
 @api_view(["POST"])
@@ -37,6 +37,45 @@ def book(request, trip_id):
     })
 
 
+@api_view(["POST"])
+def book_itinerary_view(request, trip_id):
+    """Phase 2: books every leg of a chosen itinerary (as returned by /api/trips/plan/)
+    in order. Always returns 200 -- a partially-booked itinerary is a real, meaningful
+    outcome (see ItineraryBookingResult), not an HTTP error; the response body itself
+    says whether every leg confirmed."""
+    try:
+        trip = Trip.objects.get(pk=trip_id)
+    except Trip.DoesNotExist:
+        return Response({"error": f"no such trip {trip_id}"}, status=404)
+
+    legs = request.data.get("legs")
+    if not legs:
+        return Response({"error": "legs (a non-empty list) is required"}, status=400)
+
+    required = ["transaction_id", "bpp_id", "item_id", "item_name", "provider_name", "fare", "eta_minutes"]
+    for i, leg in enumerate(legs):
+        missing = [f for f in required if f not in leg]
+        if missing:
+            return Response({"error": f"leg {i}: missing field(s): {missing}"}, status=400)
+
+    result = book_itinerary(trip, legs)
+
+    return Response({
+        "trip_id": str(trip.id),
+        "fully_booked": result.fully_booked,
+        "bookings": [
+            {"booking_id": str(b.id), "status": b.status, "order_id": b.ondc_order_id}
+            for b in result.bookings
+        ],
+        "failed_leg_index": result.failed_leg_index,
+        "failure": (
+            {"step": result.failure.step, "message": str(result.failure)}
+            if result.failure else None
+        ),
+        "legs_not_attempted": result.legs_not_attempted,
+    })
+
+
 @api_view(["GET"])
 def booking_status(request, booking_id):
     try:
@@ -46,9 +85,11 @@ def booking_status(request, booking_id):
 
     # Best-effort live refresh from the (mock) BPP — falls back to the last-known DB
     # state if the live status call fails, same "never crash on a flaky ONDC call"
-    # posture ARCHITECTURE.md calls for elsewhere.
+    # posture ARCHITECTURE.md calls for elsewhere. domain comes from the booked leg
+    # itself (Phase 2: a TRV11/TRV12 leg's status must be checked in ITS domain, not
+    # assumed to be TRV10).
     try:
-        live_status, _ = ondc_client.get_status(booking.ondc_transaction_id)
+        live_status, _ = ondc_client.get_status(booking.ondc_transaction_id, domain=booking.trip_leg.domain)
     except OndcRequestError:
         live_status = None
 

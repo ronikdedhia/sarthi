@@ -9,9 +9,11 @@ _lock = threading.Lock()
 _orders = {}  # transaction_id -> dict
 
 
-def remember_selection(transaction_id, provider_id, item_id):
+def remember_selection(transaction_id, domain, provider_id, item_id):
     with _lock:
-        _orders[transaction_id] = {"provider_id": provider_id, "item_id": item_id, "status": "selected"}
+        _orders[transaction_id] = {
+            "domain": domain, "provider_id": provider_id, "item_id": item_id, "status": "selected",
+        }
 
 
 def mark_initiated(transaction_id):

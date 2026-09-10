@@ -4,65 +4,78 @@ import { useState } from "react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-// Phase 1 scope (see ../BUILD_PLAN.md): one search -> one bookable leg. The Phase 2
-// multi-leg itinerary comparison view this will grow into isn't built yet -- this page
-// intentionally stays a single search-and-book flow rather than stubbing UI for a
-// planner that doesn't exist on the backend yet.
+// BUILD_PLAN.md Phase 2: ranked multi-leg itinerary comparison, replacing Phase 1's
+// single-domain "one search -> one bookable leg" flow (still available on the backend
+// at /api/trips/search/ + /<id>/book/, untouched, for anything that still wants it).
+// This page now drives /api/trips/plan/ (multi-modal leg-graph search) and
+// /api/trips/<id>/book_itinerary/ (books every leg of a chosen itinerary in order).
 export default function Home() {
   const [origin, setOrigin] = useState("Koramangala");
-  const [destination, setDestination] = useState("Chennai Airport");
-  const [searchState, setSearchState] = useState({ status: "idle" });
+  const [destination, setDestination] = useState("T Nagar");
+  const [preference, setPreference] = useState("balanced"); // "cheapest" | "balanced" | "fastest"
+  const [planState, setPlanState] = useState({ status: "idle" });
   const [bookingState, setBookingState] = useState({ status: "idle" });
 
-  async function handleSearch(event) {
+  const WEIGHTS = {
+    cheapest: { cost_weight: 1.0, time_weight: 0.0 },
+    balanced: { cost_weight: 0.5, time_weight: 0.5 },
+    fastest: { cost_weight: 0.0, time_weight: 1.0 },
+  };
+
+  async function handlePlan(event) {
     event.preventDefault();
-    setSearchState({ status: "loading" });
+    setPlanState({ status: "loading" });
     setBookingState({ status: "idle" });
     try {
-      const response = await fetch(`${API_BASE_URL}/api/trips/search/`, {
+      const response = await fetch(`${API_BASE_URL}/api/trips/plan/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origin, destination }),
+        body: JSON.stringify({ origin, destination, ...WEIGHTS[preference] }),
       });
       const body = await response.json();
       if (!response.ok) {
-        setSearchState({ status: "error", message: body.error || "search failed" });
+        setPlanState({ status: "error", message: body.error || "planning failed" });
         return;
       }
-      setSearchState({ status: "success", tripId: body.trip_id, transactionId: body.transaction_id, offers: body.offers });
+      setPlanState({ status: "success", tripId: body.trip_id, itineraries: body.itineraries });
     } catch {
-      setSearchState({ status: "error", message: "could not reach the Sarthi backend — is it running on :8000?" });
+      setPlanState({ status: "error", message: "could not reach the Sarthi backend — is it running on :8000?" });
     }
   }
 
-  async function handleBook(offer) {
-    setBookingState({ status: "loading", offer });
+  async function handleBook(itinerary, index) {
+    setBookingState({ status: "loading", index });
     try {
-      const response = await fetch(`${API_BASE_URL}/api/trips/${searchState.tripId}/book/`, {
+      const response = await fetch(`${API_BASE_URL}/api/trips/${planState.tripId}/book_itinerary/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transaction_id: searchState.transactionId, ...offer }),
+        body: JSON.stringify({ legs: itinerary.legs }),
       });
       const body = await response.json();
       if (!response.ok) {
-        setBookingState({ status: "error", message: body.error || "booking failed", step: body.step });
+        setBookingState({ status: "error", index, message: body.error || "booking failed" });
         return;
       }
-      setBookingState({ status: "success", bookingId: body.booking_id, orderStatus: body.status, orderId: body.order_id });
+      setBookingState({ status: "success", index, result: body });
     } catch {
-      setBookingState({ status: "error", message: "could not reach the Sarthi backend" });
+      setBookingState({ status: "error", index, message: "could not reach the Sarthi backend" });
     }
   }
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <main className="mx-auto max-w-xl px-6 py-16">
+      <main className="mx-auto max-w-2xl px-6 py-16">
         <h1 className="text-3xl font-semibold tracking-tight text-black dark:text-zinc-50">Sarthi</h1>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          Search a ride across every ONDC ride-hailing seller at once, and book the one you want.
+          Plan a trip across every ONDC mobility seller at once — auto, metro, intercity bus or flight,
+          composed into ranked multi-leg itineraries — and book the one you want.
+        </p>
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+          Demo place names (the mock catalog only knows these): Koramangala, MG Road Metro, Bengaluru Bus
+          Terminal, Bengaluru Airport, Chennai Bus Terminal, Chennai Central Metro, Chennai Airport, T Nagar.
         </p>
 
-        <form onSubmit={handleSearch} className="mt-8 flex flex-col gap-4">
+        <form onSubmit={handlePlan} className="mt-8 flex flex-col gap-4">
           <label className="flex flex-col gap-1 text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Origin
             <input
@@ -81,59 +94,116 @@ export default function Home() {
               required
             />
           </label>
+
+          <div className="flex flex-col gap-1 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Preference
+            <div className="flex gap-2">
+              {["cheapest", "balanced", "fastest"].map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setPreference(option)}
+                  className={`rounded-full border px-4 py-1.5 text-sm capitalize transition-colors ${
+                    preference === option
+                      ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
+                      : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                  }`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <button
             type="submit"
             className="rounded-full bg-black px-5 py-3 font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-black"
-            disabled={searchState.status === "loading"}
+            disabled={planState.status === "loading"}
           >
-            {searchState.status === "loading" ? "Searching…" : "Search rides"}
+            {planState.status === "loading" ? "Planning…" : "Plan trip"}
           </button>
         </form>
 
-        {searchState.status === "error" && (
+        {planState.status === "error" && (
           <p className="mt-6 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            {searchState.message}
+            {planState.message}
           </p>
         )}
 
-        {searchState.status === "success" && (
-          <ul className="mt-8 flex flex-col gap-3">
-            {searchState.offers.map((offer) => (
+        {planState.status === "success" && planState.itineraries.length === 0 && (
+          <p className="mt-6 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            No route connects those two places in the demo catalog — try one of the place names listed above.
+          </p>
+        )}
+
+        {planState.status === "success" && planState.itineraries.length > 0 && (
+          <ul className="mt-8 flex flex-col gap-4">
+            {planState.itineraries.map((itinerary, index) => (
               <li
-                key={`${offer.bpp_id}-${offer.item_id}`}
-                className="flex items-center justify-between rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+                key={index}
+                className="rounded-lg border border-zinc-200 px-4 py-4 dark:border-zinc-800"
               >
-                <div>
+                <div className="flex items-baseline justify-between">
                   <p className="font-medium text-black dark:text-zinc-50">
-                    {offer.provider_name} — {offer.item_name}
+                    ₹{itinerary.total_fare.toFixed(2)} · {(itinerary.total_duration_minutes / 60).toFixed(1)}h ·{" "}
+                    {itinerary.leg_count} leg{itinerary.leg_count > 1 ? "s" : ""}
                   </p>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    ₹{offer.fare} · {offer.eta_minutes} min away
-                  </p>
+                  <button
+                    onClick={() => handleBook(itinerary, index)}
+                    disabled={bookingState.status === "loading"}
+                    className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-white dark:hover:bg-zinc-900"
+                  >
+                    {bookingState.status === "loading" && bookingState.index === index ? "Booking…" : "Book"}
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleBook(offer)}
-                  disabled={bookingState.status === "loading"}
-                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-white dark:hover:bg-zinc-900"
-                >
-                  {bookingState.status === "loading" && bookingState.offer?.item_id === offer.item_id ? "Booking…" : "Book"}
-                </button>
+
+                <ol className="mt-3 flex flex-col gap-2">
+                  {itinerary.legs.map((leg, legIndex) => (
+                    <li key={legIndex} className="flex items-center gap-3 text-sm text-zinc-600 dark:text-zinc-400">
+                      <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs font-medium uppercase text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                        {leg.mode}
+                      </span>
+                      <span>
+                        {leg.from_place} → {leg.to_place}
+                      </span>
+                      <span className="ml-auto">
+                        {leg.provider_name} · ₹{leg.fare} · {leg.eta_minutes}m
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+
+                {bookingState.status === "error" && bookingState.index === index && (
+                  <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                    {bookingState.message}
+                  </p>
+                )}
+
+                {bookingState.status === "success" && bookingState.index === index && (
+                  <div
+                    className={`mt-3 rounded-md px-3 py-2 text-sm ${
+                      bookingState.result.fully_booked
+                        ? "bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-300"
+                        : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                    }`}
+                  >
+                    <p className="font-medium">
+                      {bookingState.result.fully_booked
+                        ? "All legs confirmed"
+                        : `Leg ${bookingState.result.failed_leg_index + 1} failed at "${bookingState.result.failure.step}" — ${bookingState.result.bookings.length} leg(s) confirmed before it, ${bookingState.result.legs_not_attempted} never attempted`}
+                    </p>
+                    <ul className="mt-1 flex flex-col gap-0.5">
+                      {bookingState.result.bookings.map((b, i) => (
+                        <li key={i}>
+                          Leg {i + 1}: {b.status} — order {b.order_id}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
-        )}
-
-        {bookingState.status === "error" && (
-          <p className="mt-6 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            Booking failed at step &ldquo;{bookingState.step}&rdquo;: {bookingState.message}
-          </p>
-        )}
-
-        {bookingState.status === "success" && (
-          <div className="mt-6 rounded-md bg-green-50 px-4 py-3 text-sm text-green-800 dark:bg-green-950 dark:text-green-300">
-            <p className="font-medium">Booking {bookingState.orderStatus}</p>
-            <p>Order ID: {bookingState.orderId}</p>
-          </div>
         )}
       </main>
     </div>

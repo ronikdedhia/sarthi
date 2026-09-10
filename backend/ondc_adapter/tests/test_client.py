@@ -43,6 +43,61 @@ class SearchSelectInitConfirmFlowTests(LiveServerTestCase):
                 client.confirm("no-such-transaction-id")
 
 
+class MultiDomainSearchTests(LiveServerTestCase):
+    """BUILD_PLAN.md Phase 2: TRV11 (metro/bus) and TRV12 (intercity) alongside TRV10."""
+
+    def _gateway_url_override(self):
+        return override_settings(ONDC_GATEWAY_BASE_URL=f"{self.live_server_url}/mock_bpp")
+
+    def test_trv11_search_returns_metro_offers_with_place_and_mode(self):
+        with self._gateway_url_override():
+            offers, transaction_id = client.search("MG Road Metro", "Bengaluru Bus Terminal", domain="ONDC:TRV11")
+
+        assert transaction_id
+        assert {o.bpp_id for o in offers} == {"namma-metro", "chennai-metro"}
+        namma_metro = next(o for o in offers if o.bpp_id == "namma-metro")
+        assert namma_metro.mode == "metro"
+        assert namma_metro.from_place == "MG Road Metro"
+        assert namma_metro.to_place == "Bengaluru Bus Terminal"
+        assert namma_metro.domain == "ONDC:TRV11"
+        assert namma_metro.transaction_id == transaction_id
+
+    def test_trv12_search_returns_intercity_offers(self):
+        with self._gateway_url_override():
+            offers, _ = client.search("Bengaluru Bus Terminal", "Chennai Bus Terminal", domain="ONDC:TRV12")
+
+        assert {o.bpp_id for o in offers} == {"intrcity-smartbus", "indigo"}
+        flight = next(o for o in offers if o.bpp_id == "indigo")
+        assert flight.mode == "flight"
+        assert flight.eta_minutes == 75
+
+    def test_search_all_domains_flattens_offers_from_all_three_domains_with_distinct_transaction_ids(self):
+        with self._gateway_url_override():
+            offers = client.search_all_domains("Koramangala", "T Nagar")
+
+        domains_seen = {o.domain for o in offers}
+        assert domains_seen == {"ONDC:TRV10", "ONDC:TRV11", "ONDC:TRV12"}
+        # each domain's search is a SEPARATE signed call -> a separate transaction_id,
+        # carried per-offer so a later leg can be selected/confirmed independently
+        txn_ids_by_domain = {o.domain: o.transaction_id for o in offers}
+        assert len(set(txn_ids_by_domain.values())) == 3
+
+    def test_a_leg_from_one_domain_can_be_selected_initiated_and_confirmed_using_its_own_transaction_id(self):
+        """Proves an individual Offer returned by search_all_domains is independently
+        bookable via its own domain+transaction_id -- exactly what a multi-leg itinerary
+        booking flow (bookings.services.book_itinerary) relies on."""
+        with self._gateway_url_override():
+            offers = client.search_all_domains("Koramangala", "T Nagar")
+            metro_leg = next(o for o in offers if o.domain == "ONDC:TRV11" and o.bpp_id == "namma-metro")
+
+            client.select(metro_leg.transaction_id, metro_leg.bpp_id, metro_leg.item_id, domain=metro_leg.domain)
+            client.init(metro_leg.transaction_id, domain=metro_leg.domain)
+            order_id, confirm_data = client.confirm(metro_leg.transaction_id, domain=metro_leg.domain)
+
+        assert order_id.startswith("order-")
+        assert confirm_data["message"]["order"]["status"] == "confirmed"
+
+
 class TamperedRequestTests(LiveServerTestCase):
     def test_a_request_signed_with_the_wrong_key_is_rejected_by_the_mock_bpp(self):
         """Confirms the mock BPP actually enforces signature verification (not just

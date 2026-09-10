@@ -15,11 +15,16 @@ Phased so you always have something demoable, and so the ONDC registry-approval 
 - [ ] Minimal Next.js UI: enter origin/destination, see ride options, book one, see status update.
 - [ ] Get the async callback handling and idempotency right here — this is the pattern every other mode reuses.
 
-## Phase 2 — Multi-mode search, single itinerary (the actual differentiator)
+## Phase 2 — Multi-mode search, single itinerary (the actual differentiator) — ✅ done 2026-09-10
 
-- [ ] Extend `ondc_adapter` to TRV11 (metro/bus) and TRV12 (intercity), reusing the Phase 1 pattern.
-- [ ] Build the `trip_planner` leg-graph + multi-objective itinerary search (cost/time/transfer trade-offs) described in [ARCHITECTURE.md](./ARCHITECTURE.md).
-- [ ] UI: itinerary comparison view (ranked multi-leg plans), select one, book all legs, handle partial-failure replanning.
+- [x] Extended `ondc_adapter` to TRV11 (metro/bus) and TRV12 (intercity) — every function (`search`/`select`/`init`/`confirm`/`get_status`) takes an optional `domain` (default TRV10, so Phase 1 call sites/tests are untouched). `search_all_domains(origin, destination)` fans out one signed search per domain and flattens the results; each returned `Offer` carries its own `domain`+`transaction_id`, so any leg is independently select/init/confirm-able regardless of which other domain's search it came from.
+- [x] `mock_bpp`'s catalog is now route-based across all three domains — a small fixed set of named places (Koramangala, MG Road Metro, Bengaluru Bus Terminal, Bengaluru Airport, Chennai Bus Terminal, Chennai Central Metro, Chennai Airport, T Nagar) connected by real (simulated) TRV10/TRV11/TRV12 routes, giving trip_planner real edges to compose multi-leg itineraries across independent sellers from.
+- [x] Built `trip_planner/planner.py` — the actual leg-graph + multi-objective search: `build_graph` (undirected adjacency list over candidate legs), `find_itinerary_paths` (DFS enumeration of every simple path up to a leg cap — the graph is small enough that exhaustive enumeration is correct, not a heuristic), `rank_itineraries` (weighted-sum scoring over normalized total fare + total duration, so callers can trade cost off against speed via `cost_weight`/`time_weight`). Pure, DB-free, unit-tested with crafted graphs proving the cost/time trade-off actually holds (`trip_planner/tests/test_planner.py`) — confirmed live too: Koramangala → T Nagar returns 4 ranked itineraries spanning ₹1209/417min (auto+metro+bus+cab, cost-weighted top pick) to ₹4549/150min (cab+flight+cab, time-weighted top pick).
+- [x] New endpoint `POST /api/trips/plan/` (multi-modal search, returns ranked itineraries) alongside the untouched Phase 1 `POST /api/trips/search/`. New `bookings.services.book_itinerary` books every leg of a chosen itinerary in order via the existing `book_leg`, stopping at the first failing leg and returning a result that shows exactly what confirmed, what failed and why, and what was never attempted (`POST /api/trips/<id>/book_itinerary/`) — see the next bullet for why this surfaces rather than auto-replans.
+- [x] UI: the Next.js page now shows ranked multi-leg itinerary cards (fare/duration/leg count, per-leg mode/place/provider), a cheapest/balanced/fastest preference toggle, book-the-whole-itinerary, and a clear partial-booking status view (which legs confirmed, which one failed and at what step, how many were never attempted).
+- [~] **Partial-failure handling is "surface clearly," not "replan"** — ARCHITECTURE.md's original phrasing offered either. Automatic re-planning around a failed leg (re-querying `trip_planner` for a fresh route from the failed leg's origin) is real, scoped-out work for Phase 3+, not silently half-built here — `bookings.services.book_itinerary`'s docstring says so explicitly. Tested live: a leg with a since-invalidated `item_id` fails cleanly at the `select` step, its own Booking persists as `STATUS_FAILED`, and every earlier leg's confirmed booking is untouched.
+
+42 backend tests passing as of this phase (up from 17 at the end of Phase 1).
 
 ## Phase 3 — Live tracking & polish
 

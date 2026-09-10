@@ -47,15 +47,25 @@ def _sign_response(payload):
 def search(request):
     body = parse_json_body(request)
     context = body.get("context", {})
+    domain = context.get("domain", "ONDC:TRV10")
 
     providers = {}
-    for provider_id, provider_name, item in all_offers():
+    for provider_id, provider_name, route in all_offers(domain):
         providers.setdefault(provider_id, {"id": provider_id, "descriptor": {"name": provider_name}, "items": []})
         providers[provider_id]["items"].append({
-            "id": item["id"],
-            "descriptor": {"name": item["name"]},
-            "price": {"currency": "INR", "value": item["fare"]},
-            "time": {"duration": f"PT{item['eta_minutes']}M"},
+            "id": route["item_id"],
+            "descriptor": {"name": route["item_name"]},
+            "price": {"currency": "INR", "value": route["fare"]},
+            "time": {"duration": f"PT{route['eta_minutes']}M"},
+            # Pragmatic simplification, not strict Beckn (a real BPP would encode this via
+            # category_id/fulfillment.type conventions) -- mode + fulfillment start/end are
+            # exactly what ondc_adapter.client needs to feed trip_planner's leg-graph search
+            # candidate edges across domains. See this module's docstring.
+            "mode": route["mode"],
+            "fulfillment": {
+                "start": {"location": {"descriptor": {"name": route["from_place"]}}},
+                "end": {"location": {"descriptor": {"name": route["to_place"]}}},
+            },
         })
 
     return _sign_response({
@@ -70,23 +80,24 @@ def search(request):
 def select(request):
     body = parse_json_body(request)
     context = body.get("context", {})
+    domain = context.get("domain", "ONDC:TRV10")
     transaction_id = context.get("transaction_id")
     order = body.get("message", {}).get("order", {})
     provider_id = order.get("provider", {}).get("id")
     item_id = order.get("items", [{}])[0].get("id")
 
-    provider, item = find_item(provider_id, item_id)
-    if item is None:
-        return JsonResponse({"error": f"no such item {provider_id}/{item_id}"}, status=400)
+    provider, route = find_item(domain, provider_id, item_id)
+    if route is None:
+        return JsonResponse({"error": f"no such item {provider_id}/{item_id} in domain {domain}"}, status=400)
 
-    store.remember_selection(transaction_id, provider_id, item_id)
+    store.remember_selection(transaction_id, domain, provider_id, item_id)
 
     return _sign_response({
         "context": {**context, "action": "on_select"},
         "message": {"order": {
             "provider": {"id": provider_id, "descriptor": {"name": provider["name"]}},
-            "items": [{"id": item_id, "descriptor": {"name": item["name"]}}],
-            "quote": {"price": {"currency": "INR", "value": item["fare"]}},
+            "items": [{"id": item_id, "descriptor": {"name": route["item_name"]}}],
+            "quote": {"price": {"currency": "INR", "value": route["fare"]}},
         }},
     })
 

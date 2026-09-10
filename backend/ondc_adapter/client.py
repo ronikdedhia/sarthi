@@ -21,6 +21,13 @@ from .signing import SignatureVerificationError, build_authorization_header, ver
 
 REQUEST_TIMEOUT_SECONDS = 10
 
+# BUILD_PLAN.md Phase 1 scope was ONDC:TRV10 (ride-hailing) only, hardcoded into every
+# context. Phase 2 adds TRV11 (metro/intracity bus) and TRV12 (intercity bus/flight) --
+# every function below now takes an optional `domain` defaulting to TRV10, so every
+# existing Phase 1 call site (and its tests) keeps behaving exactly as before.
+DEFAULT_DOMAIN = "ONDC:TRV10"
+ALL_DOMAINS = ("ONDC:TRV10", "ONDC:TRV11", "ONDC:TRV12")
+
 
 class OndcRequestError(Exception):
     """Raised for a non-2xx response, an unsigned/invalid response, or a transport
@@ -32,7 +39,13 @@ class OndcRequestError(Exception):
 @dataclasses.dataclass(frozen=True)
 class Offer:
     """One bookable option from a search -- the shape trip_planner works with, so it
-    never has to know Beckn's own nested provider/item/price JSON structure."""
+    never has to know Beckn's own nested provider/item/price JSON structure.
+
+    domain/transaction_id are carried on the Offer itself (not just returned alongside
+    it) so a Phase 2 itinerary spanning several domains' search() calls can select/init/
+    confirm each leg independently -- each leg's own domain+transaction_id, not a single
+    shared one. from_place/to_place/mode are what trip_planner's leg-graph search uses
+    to compose multi-leg itineraries across domains (see mock_bpp/catalog.py)."""
 
     bpp_id: str
     provider_name: str
@@ -41,15 +54,20 @@ class Offer:
     fare: str
     eta_minutes: int
     raw: dict
+    domain: str
+    transaction_id: str
+    from_place: str
+    to_place: str
+    mode: str
 
 
 def _new_transaction_id():
     return uuid.uuid4().hex
 
 
-def _build_context(action, transaction_id, message_id=None):
+def _build_context(action, transaction_id, domain, message_id=None):
     return {
-        "domain": "ONDC:TRV10",
+        "domain": domain,
         "action": action,
         "bap_id": settings.ONDC_BAP_SUBSCRIBER_ID,
         "bpp_id": settings.ONDC_BPP_SUBSCRIBER_ID,
@@ -86,11 +104,12 @@ def _post(path, payload):
     return response.json()
 
 
-def search(origin, destination):
-    """Returns a list of Offer -- BUILD_PLAN.md Phase 1 scope: TRV10 (ride-hailing) only."""
+def search(origin, destination, domain=DEFAULT_DOMAIN):
+    """Returns (list of Offer, transaction_id) for one domain -- BUILD_PLAN.md Phase 1
+    scope was TRV10 only; Phase 2 calls this once per domain (see search_all_domains)."""
     transaction_id = _new_transaction_id()
     payload = {
-        "context": _build_context("search", transaction_id),
+        "context": _build_context("search", transaction_id, domain),
         "message": {"intent": {"fulfillment": {
             "start": {"location": {"descriptor": {"name": origin}}},
             "end": {"location": {"descriptor": {"name": destination}}},
@@ -101,6 +120,7 @@ def search(origin, destination):
     offers = []
     for provider in data["message"]["catalog"]["bpp/providers"]:
         for item in provider["items"]:
+            fulfillment = item.get("fulfillment", {})
             offers.append(Offer(
                 bpp_id=provider["id"],
                 provider_name=provider["descriptor"]["name"],
@@ -109,30 +129,49 @@ def search(origin, destination):
                 fare=item["price"]["value"],
                 eta_minutes=int(item["time"]["duration"].strip("PTM")),
                 raw=item,
+                domain=domain,
+                transaction_id=transaction_id,
+                from_place=fulfillment.get("start", {}).get("location", {}).get("descriptor", {}).get("name", origin),
+                to_place=fulfillment.get("end", {}).get("location", {}).get("descriptor", {}).get("name", destination),
+                mode=item.get("mode", "unknown"),
             ))
     return offers, transaction_id
 
 
-def select(transaction_id, bpp_id, item_id):
+def search_all_domains(origin, destination, domains=ALL_DOMAINS):
+    """Fans out one signed search per domain and flattens the results into one list of
+    Offer -- BUILD_PLAN.md Phase 2's multi-modal search. Each Offer already carries its
+    own domain+transaction_id (see Offer's docstring), so trip_planner can select/init/
+    confirm any of them independently once composed into an itinerary. A single domain
+    search failing (e.g. TRV12 down) fails the whole plan loudly rather than silently
+    returning a partial, misleadingly-thin set of options -- see trip_planner.services."""
+    offers = []
+    for domain in domains:
+        domain_offers, _ = search(origin, destination, domain=domain)
+        offers.extend(domain_offers)
+    return offers
+
+
+def select(transaction_id, bpp_id, item_id, domain=DEFAULT_DOMAIN):
     payload = {
-        "context": _build_context("select", transaction_id),
+        "context": _build_context("select", transaction_id, domain),
         "message": {"order": {"provider": {"id": bpp_id}, "items": [{"id": item_id}]}},
     }
     return _post("select", payload)
 
 
-def init(transaction_id):
-    payload = {"context": _build_context("init", transaction_id), "message": {}}
+def init(transaction_id, domain=DEFAULT_DOMAIN):
+    payload = {"context": _build_context("init", transaction_id, domain), "message": {}}
     return _post("init", payload)
 
 
-def confirm(transaction_id):
-    payload = {"context": _build_context("confirm", transaction_id), "message": {}}
+def confirm(transaction_id, domain=DEFAULT_DOMAIN):
+    payload = {"context": _build_context("confirm", transaction_id, domain), "message": {}}
     data = _post("confirm", payload)
     return data["message"]["order"]["id"], data
 
 
-def get_status(transaction_id):
-    payload = {"context": _build_context("status", transaction_id), "message": {}}
+def get_status(transaction_id, domain=DEFAULT_DOMAIN):
+    payload = {"context": _build_context("status", transaction_id, domain), "message": {}}
     data = _post("status", payload)
     return data["message"]["order"]["status"], data
