@@ -20,8 +20,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-*t!ak04c3(^39e&+0b4=$9ax=^otnt9jp8006h3o)67+3rj_r$'
+# 2026-09-10: this used to be a literal hardcoded key committed straight into this file —
+# GitGuardian flagged it within minutes of the repo going public. Now read from DJANGO_SECRET_KEY
+# if set (put a real one in your own .env for anything beyond a local clone-and-run), otherwise a
+# fresh one is generated per process start — never a value that ends up in git history again.
+from django.core.management.utils import get_random_secret_key  # noqa: E402
+
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or get_random_secret_key()
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -85,19 +90,31 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     'CORS_ALLOWED_ORIGINS', 'http://localhost:3000',
 ).split(',')
 
-# ONDC/Beckn — demo keypairs for the local BAP <-> mock_bpp signing loop only. These are
-# throwaway keys generated for this repo (see ondc_adapter/signing.py) — meaningless
-# outside this local mock network, never register them with the real ONDC registry.
-# Override via env vars for anything beyond local dev.
+# ONDC/Beckn — demo keypairs for the local BAP <-> mock_bpp signing loop only; meaningless
+# outside this local mock network (never registered with the real ONDC registry). These used
+# to be committed literal key values here — GitGuardian flagged them as leaked secrets within
+# minutes of the repo going public (commit 3cd205a). Real key material must never be hardcoded
+# in a file that gets committed: set the *_PRIVATE_KEY/*_PUBLIC_KEY env vars yourself (a matched
+# pair — see ondc_adapter.signing.generate_signing_keypair) for anything beyond a local
+# clone-and-run; otherwise a fresh keypair is generated per process start below, never a value
+# that ends up in git history.
+from ondc_adapter.signing import generate_signing_keypair  # noqa: E402
+
 ONDC_BAP_SUBSCRIBER_ID = os.environ.get('ONDC_BAP_SUBSCRIBER_ID', 'sarthi.example.bap')
 ONDC_BAP_KEY_ID = os.environ.get('ONDC_BAP_KEY_ID', 'key1')
-ONDC_BAP_PRIVATE_KEY = os.environ.get('ONDC_BAP_PRIVATE_KEY', 'lVlQt4MHHsparnYHKXUUMhDl7Up33nYBdIIWc71klxM=')
-ONDC_BAP_PUBLIC_KEY = os.environ.get('ONDC_BAP_PUBLIC_KEY', 'sg93hqOWbUshMRUM4OwrjGBFzdRadNIWotH5o1nO5LA=')
+if os.environ.get('ONDC_BAP_PRIVATE_KEY') and os.environ.get('ONDC_BAP_PUBLIC_KEY'):
+    ONDC_BAP_PRIVATE_KEY = os.environ['ONDC_BAP_PRIVATE_KEY']
+    ONDC_BAP_PUBLIC_KEY = os.environ['ONDC_BAP_PUBLIC_KEY']
+else:
+    ONDC_BAP_PRIVATE_KEY, ONDC_BAP_PUBLIC_KEY = generate_signing_keypair()
 
 ONDC_BPP_SUBSCRIBER_ID = os.environ.get('ONDC_BPP_SUBSCRIBER_ID', 'mock-bpp.example')
 ONDC_BPP_KEY_ID = os.environ.get('ONDC_BPP_KEY_ID', 'key1')
-ONDC_BPP_PRIVATE_KEY = os.environ.get('ONDC_BPP_PRIVATE_KEY', 'HgZmYjAT6E2xA4lIoeCbsCJuZt0TmCG8Zsy7udNZ8QA=')
-ONDC_BPP_PUBLIC_KEY = os.environ.get('ONDC_BPP_PUBLIC_KEY', 'q/MGOk57+evPMYRNrNJUxPHncRbGQCE2tcSGdiDawpQ=')
+if os.environ.get('ONDC_BPP_PRIVATE_KEY') and os.environ.get('ONDC_BPP_PUBLIC_KEY'):
+    ONDC_BPP_PRIVATE_KEY = os.environ['ONDC_BPP_PRIVATE_KEY']
+    ONDC_BPP_PUBLIC_KEY = os.environ['ONDC_BPP_PUBLIC_KEY']
+else:
+    ONDC_BPP_PRIVATE_KEY, ONDC_BPP_PUBLIC_KEY = generate_signing_keypair()
 
 # Points at THIS SAME server's /mock_bpp/ endpoints — see FEASIBILITY_RESEARCH.md #3
 # and mock_bpp/README.md for why: no ONDC registry approval exists to point at a real
