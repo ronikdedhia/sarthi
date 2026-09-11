@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────┐      ┌──────────────────────────────────────┐      ┌─────────────────────────┐
-│   Next.js / React    │◄────►│              Django backend           │◄────►│   Turso (libSQL) DB      │
+│   Next.js / React    │◄────►│              Django backend           │◄────►│   Postgres (Supabase) DB │
 │  - trip request UI   │ REST │  - trip planning/orchestration engine │      │  - users, trips, legs,   │
 │  - itinerary view    │ /WS  │  - ONDC BAP protocol adapter           │      │    bookings, tracking    │
 │  - live tracking      │      │  - signing/key management              │      │    events                │
@@ -54,13 +54,15 @@ Use **Django REST Framework** for the API surface Next.js talks to. Live-trackin
 - **Live tracking — built 2026-09-10**: once booked, the frontend auto-polls `GET /api/trips/<id>/tracking/` and renders a live, per-leg timeline (mode, places, provider, a color-coded status badge), stopping once every leg reaches a terminal state. Not a map — a real map/route visualization remains a nice-to-have, not built.
 - Use Next.js API routes only as a thin proxy/BFF if you need to hide Django's internal URL or add auth-session handling; keep real logic in Django.
 
-## Database — Turso (libSQL)
+## Database — Postgres (Supabase)
 
 Core tables: `User`, `Trip`, `TripLeg` (mode, BPP id, origin/destination, scheduled window), `Booking` (per-leg booking state + ONDC transaction/message IDs for correlation), `TrackingEvent` (append-only log of status/track callbacks — you'll want this for debugging async ONDC flows more than for the product itself).
 
-Given the [Turso/Django integration gaps noted in FEASIBILITY_RESEARCH.md](./FEASIBILITY_RESEARCH.md#5-turso--django--real-but-non-trivial-integration), validate early:
-- Do a spike on Day 1: stand up `django-pyturso` (or `django-libsql`) with the actual model shapes above (including any JSON fields for storing raw ONDC payloads) before committing to it as the only data layer.
-- Store raw ONDC request/response payloads (JSON blobs) per transaction for debugging — Beckn/ONDC flows are notoriously easier to debug by replaying logged payloads than by reasoning abstractly.
+**2026-09-11: Turso was tried three separate ways first, all three genuinely broken on real testing** (see [FEASIBILITY_RESEARCH.md §5](./FEASIBILITY_RESEARCH.md#5-turso--django--real-but-non-trivial-integration) for the full story) — `django-libsql`'s WebSocket transport got a real `400` against the actual database with no working HTTP fallback; `django_pyturso`'s own dependency is embedded-file-only and rejects remote URLs outright; a custom backend built directly on the one package that DID connect (`libsql`) hit three separate Django/driver incompatibilities in a row (exception hierarchy, a read-only `isolation_level`, an incompatible `cursor()` signature) before that approach was abandoned as open-ended. Real Postgres via Supabase (`django.db.backends.postgresql`, Django's own first-party backend, wired through `dj-database-url`) replaced all of it — confirmed live: real migrations (UUID/JSONField/DecimalField models, FK constraints all clean) and a real ORM create/read/delete round trip against the actual hosted database, zero exotic-driver risk left.
+
+Use Supabase's **transaction pooler** connection string (port 6543), not the direct connection (5432) — the pooler is IPv4-compatible, which matters since Render's network is IPv4-only and Supabase's direct connection is IPv6-only by default.
+
+Store raw ONDC request/response payloads (JSON blobs) per transaction for debugging — Beckn/ONDC flows are notoriously easier to debug by replaying logged payloads than by reasoning abstractly.
 
 ## Cross-cutting requirements
 

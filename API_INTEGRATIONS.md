@@ -34,9 +34,9 @@ Options: Google Maps Platform (Directions/Distance Matrix/Geocoding APIs — pai
 
 ONDC's Payment and Settlement Protocol lets BAP/BPP negotiate settlement bilaterally rather than mandating one gateway — see [FEASIBILITY_RESEARCH.md §4](./FEASIBILITY_RESEARCH.md#4-paymentsettlement--a-separate-real-world-constraint). For v1, mock the payment confirmation step entirely. If you later want a real-money demo, a UPI-based gateway (Razorpay, Cashfree, or Setu) would be the integration point — treat this as an explicit stretch goal, not part of the core build.
 
-## 5. Database — Turso
+## 5. Database — Postgres (Supabase)
 
-Not a third-party "API" in the traditional sense but worth listing here since it's an external managed service: [Turso](https://turso.tech) (libSQL). Free tier is sufficient for a portfolio project. See [FEASIBILITY_RESEARCH.md §5](./FEASIBILITY_RESEARCH.md#5-turso--django--real-but-non-trivial-integration) for the Django integration caveats — validate `django-libsql`/`django-pyturso` against your actual model shapes on Day 1.
+Not a third-party "API" in the traditional sense but worth listing here since it's an external managed service: [Supabase](https://supabase.com) (real Postgres). Free tier is sufficient for a portfolio project (500MB DB, 1GB storage, 5GB egress — commercial use explicitly allowed; the one caveat is a free project pauses after 7 days of zero database activity, though data isn't lost, just needs resuming). Turso was tried first and abandoned after three separate real, blocking integration failures — see [FEASIBILITY_RESEARCH.md §5](./FEASIBILITY_RESEARCH.md#5-turso--django--tried-three-ways-abandoned-real-postgres-supabase-instead) for the full story.
 
 ## 6. Auth (your own users, not ONDC)
 
@@ -48,7 +48,7 @@ Sarthi needs its own end-user auth (people planning trips) — this is unrelated
 |---|---|
 | Mobility protocol flow (mock server + Pramaan) | ✅ Yes |
 | Trip planning/optimization engine | ✅ Yes — pure logic, no external dependency |
-| Django + Next.js + Turso stack | ✅ Yes |
+| Django + Next.js + Postgres (Supabase) stack | ✅ Yes |
 | Geocoding/routing (OSM stack) | ✅ Yes |
 | Real ONDC registry transactions | ⚠️ Gated on NP registration/approval — pursue in parallel, don't block v1 on it |
 | Real payment settlement | ⚠️ Out of scope for v1, mock it |

@@ -50,12 +50,53 @@ ONDC's Payment and Settlement Protocol lets BAP/BPP pairs negotiate settlement t
 
 Source: [ONDC-Protocol-Specs — Payment and Settlement Protocol](https://github.com/ONDC-Official/ONDC-Protocol-Specs/blob/master/protocol-specifications/docs/draft/Payment%20and%20Settlement%20Protocol.md)
 
-## 5. Turso + Django — real but non-trivial integration
+## 5. Turso + Django — tried three ways, abandoned; real Postgres (Supabase) instead
 
-Turso (built on libSQL, a SQLite fork with edge-replica support) does **not** have first-class Django support the way Postgres/MySQL/SQLite do. What exists:
-- **[django-libsql](https://github.com/aaronkazah/django-libsql)** — a community Django DB backend for libSQL/Turso. Known limitation: no support for custom SQL functions, so some Django ORM features that rely on them won't work.
-- **[django-pyturso](https://pypi.org/project/django-pyturso/)** — lets a Django project use its normal ORM/migrations/admin against an *embedded* local Turso database file (embedded-replica model), rather than talking to Turso's remote/edge service directly.
-- **[libsql-client-py](https://github.com/tursodatabase/libsql-client-py)** — the official Python SDK, works standalone (non-ORM) against local or remote libSQL.
-- SQLAlchemy has a proper libSQL dialect (`sqlalchemy-libsql`) if you decide the ORM layer should bypass Django's ORM for the parts that touch Turso.
+**2026-09-11 update: Turso's Django story turned out not to work in practice, on real
+testing against a real hosted database — not just the theoretical gaps described below.**
+Three separate approaches were tried, in this order:
 
-**Practical recommendation**: don't bet the whole app's ORM on community Turso backends for a first build. Prototype the actual data access pattern early (Day 1 of the build, not late) to confirm `django-libsql` or `django-pyturso` covers what you need (migrations, JSON fields if used, transactions across the trip/booking models) — if it doesn't, the fallback is using Django's standard SQLite backend for local dev and `libsql-client-py` directly for the specific edge-sync use case, rather than forcing the whole ORM through it.
+1. **`django_pyturso`** (embedded local-file libSQL) — confirmed working for local
+   migrations/UUID/JSONField/DecimalField/FK constraints, but its local file lives on
+   Render free tier's *ephemeral* disk (wiped on every spin-down/redeploy), so it can't
+   hold real data in production at all. Also depends on a package called `turso` (not
+   `libsql`) that is embedded-file-only by design — confirmed via direct testing: it
+   raises `turso.IoError: open: NotFound` against a real `libsql://` URL, and
+   `django_pyturso`'s own connection code explicitly rejects URL-shaped `NAME` values and
+   never passes an auth token through. Also requires Python ≥3.14.
+2. **[django-libsql](https://github.com/aaronkazah/django-libsql)** (ENGINE
+   `libsql.db.backends.sqlite3`, remote mode) — depends on `libsql_client`, whose DB-API2
+   shim fails to import at all on Python 3.14 (`ImportError: cannot import name 'version'
+   from 'sqlite3.dbapi2'` — an already-latest-release upstream bug, no fix available).
+   Even on Python 3.12 (sidestepping that), its WebSocket/Hrana transport got a real `400
+   Invalid response status` connecting to the actual hosted database, with no working
+   plain-HTTP fallback registered in that same compatibility layer (`KeyError: 'https'`).
+3. **A custom Django backend built directly on `libsql`** (a third, distinct package from
+   both above) — this one genuinely connects: a real `SELECT 1` against the real database
+   succeeded with `libsql.connect(database=url, auth_token=token)`. But wiring it into
+   Django (subclassing the stock sqlite3 backend, since `libsql` is meant to be
+   DB-API-compatible) hit three separate, real incompatibilities in a row: a flat
+   exception hierarchy missing `DataError`/`IntegrityError`/etc. that Django's error
+   wrapper expects to exist unconditionally; a read-only `Connection.isolation_level`
+   where Django's autocommit toggle expects to set it (libsql exposes a separate,
+   writable `.autocommit` boolean instead — the newer Python 3.12+ sqlite3 API style, not
+   the older one Django's stock backend still uses); and a `cursor()` that rejects the
+   `factory=` kwarg Django passes. Each was fixed individually, but the *pattern* — a new,
+   different incompatibility every time the last one was cleared, with `migrate` not even
+   as far as schema/introspection code yet — was the signal to stop patching and switch
+   approaches rather than keep guessing how many more there were.
+
+**What actually shipped**: real Postgres via Supabase, using Django's own first-party
+`django.db.backends.postgresql` backend (wired through `dj-database-url` for connection-
+string parsing). Confirmed live: real migrations against the actual hosted database (every
+one of Sarthi's real models, UUID/JSONField/DecimalField/FK constraints included, applied
+clean) and a real ORM create → read → delete round trip. Zero exotic-driver risk left —
+this is the most battle-tested database backend Django has.
+
+**Practical recommendation for a future project**: don't bet a Django app's ORM on
+community Turso backends, even after confirming the underlying database connects fine
+standalone — the Django integration layer is where the real risk lives, and it's deep
+enough that "prototype it on Day 1" (this doc's own earlier advice) can still cost you a
+full pivot later. If Turso's specific edge/embedded-replica properties aren't a hard
+requirement, real Postgres (Supabase, Neon, Render's own, etc.) removes this entire class
+of risk from the start.

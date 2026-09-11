@@ -16,6 +16,19 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# 2026-09-10: python-dotenv has been a requirements.txt dependency since Phase 0, but nothing
+# ever actually called load_dotenv() -- backend/.env was documented (.env.example) as the
+# place to override defaults, but silently had zero effect. Real now: this is what lets a
+# real DATABASE_URL in backend/.env actually reach the DATABASES config below. See
+# test_settings.py for why test runs are still safe from this (they must NOT pick up real
+# production database credentials from this file) -- a conftest.py env-var guard was tried
+# first and does NOT work here: pytest-django resolves Django settings inside its own
+# pytest_load_initial_conftests hook, which runs before a rootdir conftest.py's own
+# module-level code executes.
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(BASE_DIR / '.env')
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
@@ -28,10 +41,25 @@ from django.core.management.utils import get_random_secret_key  # noqa: E402
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or get_random_secret_key()
 
+# 2026-09-11: both of these used to be hardcoded (DEBUG = True, ALLOWED_HOSTS = []) --
+# harmless for a local clone-and-run (DEBUG=True makes Django skip the ALLOWED_HOSTS check
+# entirely), but a real, silent trap for an actual deployment: the moment DEBUG is
+# correctly set False for a public server, ALLOWED_HOSTS=[] would reject every single
+# request. Now env-driven, defaulting to the safe production posture (DEBUG off) rather
+# than the safe-for-local-clone one -- explicitly opt into DEBUG=1 for local dev instead.
+#
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', '0') == '1'
 
-ALLOWED_HOSTS = []
+# Render injects RENDER_EXTERNAL_HOSTNAME automatically for every deployed service -- no
+# manual step needed there. DJANGO_ALLOWED_HOSTS (comma-separated) covers anywhere else
+# (a custom domain, a different host). localhost/127.0.0.1 are always allowed since local
+# dev needs them regardless of DEBUG.
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+if os.environ.get('RENDER_EXTERNAL_HOSTNAME'):
+    ALLOWED_HOSTS.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
+if os.environ.get('DJANGO_ALLOWED_HOSTS'):
+    ALLOWED_HOSTS.extend(h.strip() for h in os.environ['DJANGO_ALLOWED_HOSTS'].split(',') if h.strip())
 
 
 # Application definition
@@ -159,18 +187,57 @@ ONDC_CALLBACK_TIMEOUT_SECONDS = float(os.environ.get('ONDC_CALLBACK_TIMEOUT_SECO
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-# 2026-09-10 Turso spike (FEASIBILITY_RESEARCH.md #5): django_pyturso is a real,
-# community-maintained Django backend for Turso's embedded libSQL engine (local file,
-# not the hosted edge service — that needs a separate sync step django_pyturso doesn't
-# handle). Confirmed working here: migrations, UUID/JSONField/DecimalField model fields
-# (bookings.models) and FK constraints all ran clean in the spike below. DJANGO_DB_ENGINE
-# lets `pytest`/CI swap to plain sqlite3 without code changes if Turso ever regresses.
-DATABASES = {
-    'default': {
-        'ENGINE': os.environ.get('DJANGO_DB_ENGINE', 'django_pyturso'),
-        'NAME': str(BASE_DIR / 'db.turso'),
+# 2026-09-11: Turso was tried three separate ways for real hosted-database persistence
+# (Render's free tier wipes any local file on every spin-down, so *something* real was
+# needed) -- every one hit a genuine, blocking problem on real testing, not just docs:
+#   - django-libsql (ENGINE 'libsql.db.backends.sqlite3') depends on libsql_client, whose
+#     DB-API2 shim fails to import at all on Python 3.14 (already-latest-release upstream
+#     bug), and even on 3.12 its WebSocket/Hrana transport got a real
+#     "400 Invalid response status" against this project's actual database, with no
+#     working plain-HTTP fallback registered in that same compatibility layer.
+#   - django_pyturso (embedded local-file libSQL, ENGINE 'django_pyturso') depends on a
+#     *different*, confusingly-similarly-named package ('turso', not 'libsql') that is
+#     embedded-file-only -- confirmed via direct testing: raises turso.IoError:
+#     open: NotFound against a real libsql:// URL. It also requires Python >=3.14, which
+#     conflicts outright with the one package that DID connect (see below).
+#   - A custom backend built directly on `libsql` (the one package confirmed to actually
+#     connect: a real `SELECT 1` against this project's real database succeeded) DID
+#     connect, but hit three separate, real incompatibilities in a row with Django's stock
+#     sqlite3 backend it was subclassing (a flat exception hierarchy missing DataError/
+#     IntegrityError/etc., a read-only `isolation_level` where Django expects to set it,
+#     and a `cursor()` that rejects the `factory=` kwarg Django passes) -- each fixed
+#     individually, but the pattern (a new, different incompatibility every time the last
+#     one was cleared, with migrate not even as far as schema/introspection code yet) was
+#     the signal to stop patching and switch approaches rather than keep guessing how many
+#     more there were.
+#
+# Real Postgres (Supabase) replaces all of that: Django's own first-party, most
+# battle-tested database backend, zero exotic-driver risk. DATABASE_URL (Supabase's
+# transaction-pooler connection string, port 6543 -- IPv4-compatible, unlike the direct
+# connection on 5432, which matters since Render's network is IPv4-only) selects it when
+# set; otherwise this falls back to plain local sqlite3 (fine for local dev, where
+# ephemeral disk doesn't matter -- tests always use this path too, via test_settings.py,
+# regardless of what's in backend/.env). DJANGO_DB_ENGINE still lets CI force a specific
+# engine regardless.
+_DATABASE_URL = os.environ.get('DATABASE_URL')
+
+if os.environ.get('DJANGO_DB_ENGINE'):
+    DATABASES = {
+        'default': {
+            'ENGINE': os.environ['DJANGO_DB_ENGINE'],
+            'NAME': str(BASE_DIR / 'db.sqlite3'),
+        }
     }
-}
+elif _DATABASE_URL:
+    import dj_database_url
+    DATABASES = {'default': dj_database_url.parse(_DATABASE_URL, conn_max_age=600)}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': str(BASE_DIR / 'db.sqlite3'),
+        }
+    }
 
 
 # Password validation
