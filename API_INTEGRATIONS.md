@@ -38,7 +38,11 @@ ONDC's Payment and Settlement Protocol lets BAP/BPP negotiate settlement bilater
 
 Not a third-party "API" in the traditional sense but worth listing here since it's an external managed service: [Supabase](https://supabase.com) (real Postgres). Free tier is sufficient for a portfolio project (500MB DB, 1GB storage, 5GB egress — commercial use explicitly allowed; the one caveat is a free project pauses after 7 days of zero database activity, though data isn't lost, just needs resuming). Turso was tried first and abandoned after three separate real, blocking integration failures — see [FEASIBILITY_RESEARCH.md §5](./FEASIBILITY_RESEARCH.md#5-turso--django--tried-three-ways-abandoned-real-postgres-supabase-instead) for the full story.
 
-## 6. Auth (your own users, not ONDC)
+## 6. Natural-language trip requests — Gemini
+
+[Google AI Studio](https://aistudio.google.com) — free API key, no card required. Used by `trip_planner/nl_intent.py` for `POST /api/trips/plan_from_text/` only; the original form-based `/plan/` needs nothing here. Free tier (confirmed 2026-09) is Flash-only (Gemini 2.5 Pro moved behind billing) — 250 req/day on Flash, 1,000 req/day on Flash-Lite — comfortably enough for a portfolio demo at one request per trip search. One real caveat confirmed live: `gemini-flash-latest` occasionally returns a transient `503`; Sarthi surfaces this as a clear `422` to the caller rather than retrying silently or crashing. Structured JSON output (`responseSchema`) is used for extraction, not free-text parsing — reliable, not a guess at whatever the model feels like returning.
+
+## 7. Auth (your own users, not ONDC)
 
 Sarthi needs its own end-user auth (people planning trips) — this is unrelated to ONDC's NP-to-NP signing. Standard Django auth + DRF token/JWT (e.g. `djangorestframework-simplejwt`) is sufficient; no external identity provider is required unless you want social login for demo polish.
 
@@ -50,5 +54,6 @@ Sarthi needs its own end-user auth (people planning trips) — this is unrelated
 | Trip planning/optimization engine | ✅ Yes — pure logic, no external dependency |
 | Django + Next.js + Postgres (Supabase) stack | ✅ Yes |
 | Geocoding/routing (OSM stack) | ✅ Yes |
+| Natural-language trip requests (Gemini) | ✅ Yes — free API key, confirmed live |
 | Real ONDC registry transactions | ⚠️ Gated on NP registration/approval — pursue in parallel, don't block v1 on it |
 | Real payment settlement | ⚠️ Out of scope for v1, mock it |

@@ -1,9 +1,36 @@
+import os
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from ondc_adapter.client import OndcRequestError
 
+from .nl_intent import NlIntentError, parse_trip_request
 from .services import plan_itineraries, search_trips
+
+
+def _serialize_itineraries(itineraries):
+    """Shared by plan/plan_from_text -- both return the exact same itinerary shape,
+    since plan_from_text is just a natural-language front door onto the same planner."""
+    return [
+        {
+            "total_fare": itinerary.total_fare,
+            "total_duration_minutes": itinerary.total_duration_minutes,
+            "leg_count": itinerary.leg_count,
+            "legs": [
+                {
+                    "domain": leg.offer.domain, "transaction_id": leg.offer.transaction_id,
+                    "bpp_id": leg.offer.bpp_id, "provider_name": leg.offer.provider_name,
+                    "item_id": leg.offer.item_id, "item_name": leg.offer.item_name,
+                    "fare": leg.offer.fare, "eta_minutes": leg.offer.eta_minutes,
+                    "mode": leg.mode, "from_place": leg.from_place, "to_place": leg.to_place,
+                    "raw": leg.offer.raw,
+                }
+                for leg in itinerary.legs
+            ],
+        }
+        for itinerary in itineraries
+    ]
 
 
 @api_view(["POST"])
@@ -58,23 +85,37 @@ def plan(request):
 
     return Response({
         "trip_id": str(trip.id),
-        "itineraries": [
-            {
-                "total_fare": itinerary.total_fare,
-                "total_duration_minutes": itinerary.total_duration_minutes,
-                "leg_count": itinerary.leg_count,
-                "legs": [
-                    {
-                        "domain": leg.offer.domain, "transaction_id": leg.offer.transaction_id,
-                        "bpp_id": leg.offer.bpp_id, "provider_name": leg.offer.provider_name,
-                        "item_id": leg.offer.item_id, "item_name": leg.offer.item_name,
-                        "fare": leg.offer.fare, "eta_minutes": leg.offer.eta_minutes,
-                        "mode": leg.mode, "from_place": leg.from_place, "to_place": leg.to_place,
-                        "raw": leg.offer.raw,
-                    }
-                    for leg in itinerary.legs
-                ],
-            }
-            for itinerary in itineraries
-        ],
+        "itineraries": _serialize_itineraries(itineraries),
+    })
+
+
+@api_view(["POST"])
+def plan_from_text(request):
+    """Natural-language front door onto `plan` above: "get me from Koramangala to
+    T Nagar tomorrow morning, keep it cheap" instead of a rigid origin/destination/
+    weights form. Gemini (trip_planner.nl_intent) extracts the structured request, which
+    then flows through the exact same plan_itineraries() as the form-based /plan/
+    endpoint -- nothing about ONDC search/booking knows or cares that this leg started
+    as free text."""
+    text = request.data.get("text")
+    if not text:
+        return Response({"error": "text is required"}, status=400)
+
+    try:
+        intent = parse_trip_request(text, api_key=os.environ.get("GEMINI_API_KEY"))
+    except NlIntentError as e:
+        return Response({"error": f"could not understand that request: {e}"}, status=422)
+
+    try:
+        trip, itineraries = plan_itineraries(
+            intent["origin"], intent["destination"],
+            cost_weight=intent["cost_weight"], time_weight=intent["time_weight"],
+        )
+    except OndcRequestError as e:
+        return Response({"error": f"search failed: {e}"}, status=502)
+
+    return Response({
+        "trip_id": str(trip.id),
+        "understood_as": intent,
+        "itineraries": _serialize_itineraries(itineraries),
     })
