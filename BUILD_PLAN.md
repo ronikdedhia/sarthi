@@ -88,6 +88,38 @@ config:
 
 65 backend tests passing as of this phase (up from 60 at the end of Phase 3).
 
+## Deployment — ✅ live on Render + Vercel (free tier), done 2026-09-11
+
+Backend on Render (`sarthi-aavy.onrender.com`), frontend on Vercel (`sarthi-drab.vercel.app`),
+DB on Supabase — all free tier. Two real, non-obvious production bugs found and fixed on
+first real deploy, neither reproducible against the local dev server:
+
+- **502/read-timeout on every `/api/trips/plan/` call in production.** Root cause: Render's
+  default `gunicorn` start command runs a single worker. This app calls back into *itself*
+  over real HTTPS (`mock_bpp`'s ACK-then-callback round trip hits this same server's own
+  `on_search`/etc. endpoints via `ONDC_GATEWAY_BASE_URL`) — a single worker can't serve the
+  outer request and the inner self-call at the same time, so the self-call starved waiting
+  for a worker that was itself blocked, until it timed out. Locally this never showed up
+  because Django's dev server threads by default. Fixed by explicitly setting
+  `--workers 2 --threads 4` on the Render start command (`gunicorn
+  sarthi_backend.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout
+  30`) — confirmed live afterward with a real 200 + real ranked itineraries.
+- **`plan_from_text/` intermittently timing out against the real Gemini API in production.**
+  `gemini-flash-latest` now resolves to a reasoning/"thinking" model version
+  (`usageMetadata.thoughtsTokenCount > 0` even for a trivial prompt) — a real direct call
+  took ~15s for a one-word answer, right at the old 15s client timeout in
+  `trip_planner/nl_intent.py`, so real requests were racing the timeout rather than a
+  genuinely hung call ever being caught. Raised to 30s.
+- Render's free-tier **Pre-Deploy Command is silently a no-op** (paid-tier-only, confirmed
+  by testing — a PATCH to set it returns 200 but never persists) — `python manage.py
+  migrate` is folded into the Build Command instead
+  (`pip install -r requirements.txt && python manage.py migrate`).
+- Root Directory must be set explicitly per app (`backend` / `frontend`) since this is one
+  repo with both apps in it — Render doesn't infer it, and building without it fails at
+  `pip install -r requirements.txt` (`backend/.python-version` pins Python to 3.12.8; Render
+  otherwise defaulted to 3.14, which is exactly the version the Turso saga in §5 above
+  already showed is broken for this project's now-abandoned libsql dependencies).
+
 ## What "done" looks like for a resume/portfolio pass — ✅ achieved as of Phase 3
 
 A live demo where: you type a multi-city, multi-modal trip request → Sarthi shows 2-3 ranked itinerary options spanning auto + metro + intercity bus/flight from *different, independent* ONDC seller apps → you book one → you watch live status updates as each leg progresses (`confirmed` → `in_progress` → `completed`, polling `GET /api/trips/<id>/tracking/`) → if a leg's price/availability changes mid-booking, the system surfaces exactly which leg and why rather than failing silently or half-booking. All of this is real, tested, and confirmed live against the running dev server — none of it requires real registry access.

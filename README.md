@@ -1,5 +1,7 @@
 # Sarthi
 
+**Live demo: [sarthi-drab.vercel.app](https://sarthi-drab.vercel.app/)** (frontend on Vercel, backend on Render — both free tier; the backend may take ~30-60s to wake up on the first request after idling)
+
 **Plan and book a multi-leg trip across every ONDC mobility seller at once — auto, metro, intercity bus, or flight, composed into ranked itineraries instead of five separate single-mode apps.**
 
 Give it an origin and destination — or just type "get me from Koramangala to T Nagar tomorrow morning, keep it cheap" and let Gemini turn that into a real search — and Sarthi fans real, signed ONDC-shaped `search` calls out across all three mobility domains (ride-hailing, metro/bus, intercity), builds a leg graph out of every real offer that comes back, and ranks genuine multi-leg itineraries by cost vs. speed — e.g. an auto+metro+intercity-bus+cab route for ₹1209/~7h next to a cab+flight+cab route for ₹4549/2.5h. Book the one you want and it drives the real `select → init → confirm` sequence for every leg in order, surfacing clearly (not silently) if one leg's price or availability changed mid-booking — then watch every leg's status genuinely progress (`confirmed → in_progress → completed`) live, both in the UI and via a background worker that keeps the trip's real state current whether or not anyone's watching.

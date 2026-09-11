@@ -22,7 +22,11 @@ import json
 import requests
 
 _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-_REQUEST_TIMEOUT_SECONDS = 15
+# 2026-09-11: confirmed live that "gemini-flash-latest" now resolves to a reasoning/
+# "thinking" model version (usageMetadata.thoughtsTokenCount > 0 even for a trivial
+# one-word prompt) -- a real direct call took ~15s just for that, so the old 15s timeout
+# was routinely racing real latency rather than catching a genuinely hung request.
+_REQUEST_TIMEOUT_SECONDS = 30
 
 _RESPONSE_SCHEMA = {
     "type": "OBJECT",
